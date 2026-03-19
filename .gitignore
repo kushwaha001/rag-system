@@ -1,0 +1,31 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+
+# Environment
+.env
+
+# Models (too large for GitHub)
+models/
+*.safetensors
+*.bin
+*.gguf
+
+# Data
+data/
+*.pdf
+*.docx
+
+# Storage
+qdrant_storage/
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
