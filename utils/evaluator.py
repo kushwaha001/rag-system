@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 VLLM_HOST = os.getenv("VLLM_HOST", "http://localhost:8000")
-VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-32B-Instruct-AWQ")
+VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-14B-Instruct-AWQ")
 FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.8"))
 
 async def evaluate_response(

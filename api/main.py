@@ -11,7 +11,7 @@ load_dotenv()
 app = FastAPI(title="Industrial RAG System", version="1.0.0")
 
 VLLM_HOST = os.getenv("VLLM_HOST", "http://localhost:8000")
-VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-32B-Instruct-AWQ")
+VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-14B-Instruct-AWQ")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "http://localhost:6333")
 FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.8"))
 
@@ -25,6 +25,10 @@ class QueryRequest(BaseModel):
 
 class IngestRequest(BaseModel):
     file_path: str
+
+class FolderIngestRequest(BaseModel):
+    folder_path: str
+    use_vlm: bool = False
 
 @app.get("/health")
 async def health():
@@ -69,6 +73,15 @@ async def ingest(req: IngestRequest):
     try:
         from ingestion.pipeline import ingest_document
         result = ingest_document(req.file_path)
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/ingest/folder")
+async def ingest_folder_endpoint(req: FolderIngestRequest):
+    try:
+        from ingestion.pipeline import ingest_folder
+        result = ingest_folder(req.folder_path, use_vlm=req.use_vlm)
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -164,4 +177,4 @@ Answer:"""
         return final_response
 
     except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e)) 
+        raise HTTPException(status_code=500, detail=str(e))
