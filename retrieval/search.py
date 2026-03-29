@@ -53,25 +53,20 @@ def reciprocal_rank_fusion(
     return fused
 
 def retrieve(query: str, top_k: int = 5) -> List[Dict]:
-    """
-    Full retrieval pipeline:
-    Dense search → RRF fusion → BGE Reranker → top_k results
-    """
     print(f"🔍 Retrieving for: {query}")
 
-    # Step 1 — Dense retrieval (get more candidates for reranker)
     dense_results = dense_search(query, top_k=top_k * 3)
     print(f"✅ Dense retrieval: {len(dense_results)} results")
 
-    # Step 2 — RRF fusion
     fused_results = reciprocal_rank_fusion([dense_results])
     print(f"✅ RRF fusion: {len(fused_results)} results")
 
-    # Step 3 — Rerank with BGE cross-encoder
-    from utils.reranker import get_reranker
-    reranker = get_reranker()
-    reranked = reranker.rerank(query, fused_results, top_k=top_k)
-    print(f"✅ Reranked: {len(reranked)} results")
+    # 🔥 RERANKER DISABLED
+    for r in fused_results:
+        r["reranker_score"] = r.get("rrf_score", 0.0)
+
+    reranked = fused_results[:top_k]
+    print(f"✅ Using top-{top_k} without reranker")
 
     return reranked
 
