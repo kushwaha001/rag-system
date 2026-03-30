@@ -1,13 +1,1351 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>frontend</title>
-  </head>
-  <body>
-    <div id="root"></div>
-    <script type="module" src="/src/main.jsx"></script>
-  </body>
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>RAG System — Technical Intelligence</title>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --bg2: #111118;
+    --bg3: #1a1a24;
+    --border: #2a2a3a;
+    --accent: #4f9eff;
+    --accent2: #7c3aed;
+    --success: #22c55e;
+    --warning: #f59e0b;
+    --danger: #ef4444;
+    --text: #e2e8f0;
+    --text2: #94a3b8;
+    --text3: #64748b;
+    --mono: 'IBM Plex Mono', monospace;
+    --sans: 'IBM Plex Sans', sans-serif;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: var(--sans);
+    background: var(--bg);
+    color: var(--text);
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  /* HEADER */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    flex-shrink: 0;
+  }
+
+  .logo {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-family: var(--mono);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 0.05em;
+  }
+
+  .logo-icon {
+    width: 28px;
+    height: 28px;
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border-radius: 6px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+  }
+
+  .status-bar {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+  }
+
+  .status-dot {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text3);
+  }
+
+  .dot {
+    width: 7px;
+    height: 7px;
+    border-radius: 50%;
+    background: var(--text3);
+  }
+
+  .dot.online { background: var(--success); box-shadow: 0 0 6px var(--success); animation: pulse 2s infinite; }
+  .dot.offline { background: var(--danger); }
+
+  @keyframes pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  /* TABS */
+  .tabs {
+    display: flex;
+    padding: 0 24px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg2);
+    flex-shrink: 0;
+  }
+
+  .tab {
+    padding: 12px 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text3);
+    cursor: pointer;
+    border-bottom: 2px solid transparent;
+    transition: all 0.2s;
+    letter-spacing: 0.03em;
+    text-transform: uppercase;
+  }
+
+  .tab:hover { color: var(--text2); }
+  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  /* MAIN LAYOUT */
+  .main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* PANELS */
+  .panel {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .panel.active { display: flex; }
+
+  /* ===================== CHAT PANEL ===================== */
+  .chat-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .messages::-webkit-scrollbar { width: 4px; }
+  .messages::-webkit-scrollbar-track { background: transparent; }
+  .messages::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  .message {
+    display: flex;
+    gap: 12px;
+    animation: fadeIn 0.3s ease;
+  }
+
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+
+  .message.user { flex-direction: row-reverse; }
+
+  .avatar {
+    width: 32px;
+    height: 32px;
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 14px;
+    flex-shrink: 0;
+    font-family: var(--mono);
+    font-weight: 600;
+  }
+
+  .avatar.user-av { background: linear-gradient(135deg, var(--accent2), #9333ea); color: white; font-size: 11px; }
+  .avatar.bot-av { background: linear-gradient(135deg, var(--accent), #0ea5e9); color: white; font-size: 11px; }
+
+  .bubble {
+    max-width: 75%;
+    padding: 14px 18px;
+    border-radius: 12px;
+    font-size: 14px;
+    line-height: 1.6;
+  }
+
+  .message.user .bubble {
+    background: linear-gradient(135deg, var(--accent2), #7c3aed88);
+    border: 1px solid #7c3aed44;
+    color: var(--text);
+  }
+
+  .message.bot .bubble {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    color: var(--text);
+  }
+
+  .bubble .verdict {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    margin-bottom: 8px;
+  }
+
+  .verdict.pass { background: #22c55e22; color: var(--success); border: 1px solid #22c55e44; }
+  .verdict.fail { background: #ef444422; color: var(--danger); border: 1px solid #ef444444; }
+
+  .sources {
+    margin-top: 12px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+  }
+
+  .sources-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+    margin-bottom: 8px;
+  }
+
+  .source-item {
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 8px 10px;
+    margin-bottom: 6px;
+    font-size: 12px;
+    color: var(--text2);
+  }
+
+  .source-file {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+
+  .scores {
+    display: flex;
+    gap: 12px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+
+  .score-chip {
+    font-family: var(--mono);
+    font-size: 10px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    background: var(--bg2);
+    border: 1px solid var(--border);
+    color: var(--text2);
+  }
+
+  .latency {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text3);
+    margin-top: 8px;
+  }
+
+  /* TYPING INDICATOR */
+  .typing {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    padding: 14px 18px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    width: fit-content;
+  }
+
+  .typing span {
+    width: 6px;
+    height: 6px;
+    background: var(--accent);
+    border-radius: 50%;
+    animation: bounce 1.2s infinite;
+  }
+
+  .typing span:nth-child(2) { animation-delay: 0.2s; }
+  .typing span:nth-child(3) { animation-delay: 0.4s; }
+
+  @keyframes bounce {
+    0%, 60%, 100% { transform: translateY(0); }
+    30% { transform: translateY(-6px); }
+  }
+
+  /* CHAT INPUT */
+  .chat-input-area {
+    padding: 16px 24px;
+    border-top: 1px solid var(--border);
+    background: var(--bg2);
+    display: flex;
+    gap: 12px;
+    align-items: flex-end;
+  }
+
+  .chat-input {
+    flex: 1;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 16px;
+    font-family: var(--sans);
+    font-size: 14px;
+    color: var(--text);
+    resize: none;
+    outline: none;
+    transition: border-color 0.2s;
+    min-height: 46px;
+    max-height: 120px;
+  }
+
+  .chat-input:focus { border-color: var(--accent); }
+  .chat-input::placeholder { color: var(--text3); }
+
+  .send-btn {
+    background: linear-gradient(135deg, var(--accent), #0ea5e9);
+    border: none;
+    border-radius: 10px;
+    width: 46px;
+    height: 46px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: opacity 0.2s, transform 0.1s;
+    flex-shrink: 0;
+  }
+
+  .send-btn:hover { opacity: 0.9; transform: scale(1.05); }
+  .send-btn:active { transform: scale(0.95); }
+  .send-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  /* ===================== QUESTION PAPER PANEL ===================== */
+  .qp-container {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+  }
+
+  .qp-form {
+    width: 380px;
+    flex-shrink: 0;
+    padding: 24px;
+    border-right: 1px solid var(--border);
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+
+  .qp-output {
+    flex: 1;
+    padding: 24px;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .section-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: var(--text3);
+    margin-bottom: 12px;
+  }
+
+  .form-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .form-label {
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text2);
+  }
+
+  .form-input, .form-select, .form-textarea {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 10px 14px;
+    font-family: var(--sans);
+    font-size: 13px;
+    color: var(--text);
+    outline: none;
+    transition: border-color 0.2s;
+    width: 100%;
+  }
+
+  .form-input:focus, .form-select:focus, .form-textarea:focus {
+    border-color: var(--accent);
+  }
+
+  .form-select option { background: var(--bg3); }
+
+  .form-textarea {
+    resize: vertical;
+    min-height: 80px;
+  }
+
+  .checkbox-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+
+  .checkbox-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    cursor: pointer;
+    transition: all 0.2s;
+    font-size: 13px;
+    color: var(--text2);
+  }
+
+  .checkbox-item:hover { border-color: var(--accent); color: var(--text); }
+  .checkbox-item.checked { border-color: var(--accent); background: #4f9eff11; color: var(--accent); }
+
+  .checkbox-item input { display: none; }
+
+  .slider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .form-slider {
+    flex: 1;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+
+  .slider-val {
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--accent);
+    width: 28px;
+    text-align: right;
+  }
+
+  .generate-btn {
+    background: linear-gradient(135deg, var(--accent), var(--accent2));
+    border: none;
+    border-radius: 10px;
+    padding: 14px;
+    font-family: var(--mono);
+    font-size: 13px;
+    font-weight: 600;
+    color: white;
+    cursor: pointer;
+    transition: opacity 0.2s, transform 0.1s;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+
+  .generate-btn:hover { opacity: 0.9; transform: translateY(-1px); }
+  .generate-btn:active { transform: translateY(0); }
+  .generate-btn:disabled { opacity: 0.4; cursor: not-allowed; transform: none; }
+
+  .output-box {
+    flex: 1;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 20px;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    white-space: pre-wrap;
+    overflow-y: auto;
+    font-family: var(--sans);
+    min-height: 200px;
+  }
+
+  .output-placeholder {
+    color: var(--text3);
+    font-style: italic;
+    font-size: 13px;
+  }
+
+  .output-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+  }
+
+  .action-btn {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text2);
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+
+  .action-btn:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ===================== CUSTOM PROMPT PANEL ===================== */
+  .cp-container {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding: 24px;
+    gap: 20px;
+  }
+
+  .cp-top {
+    display: flex;
+    gap: 20px;
+    flex-shrink: 0;
+  }
+
+  .cp-left {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .cp-right {
+    width: 280px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .prompt-textarea {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    font-family: var(--mono);
+    font-size: 13px;
+    color: var(--text);
+    resize: none;
+    outline: none;
+    transition: border-color 0.2s;
+    height: 180px;
+    width: 100%;
+    line-height: 1.6;
+  }
+
+  .prompt-textarea:focus { border-color: var(--accent); }
+
+  .template-grid {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .template-btn {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text2);
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: left;
+  }
+
+  .template-btn:hover { border-color: var(--accent2); color: var(--text); background: #7c3aed11; }
+
+  .params-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+  }
+
+  .param-group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .param-label {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text3);
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+  }
+
+  .cp-output {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    overflow: hidden;
+    min-height: 0;
+  }
+
+  .cp-result {
+    flex: 1;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 16px;
+    overflow-y: auto;
+    font-size: 14px;
+    line-height: 1.7;
+    color: var(--text);
+    white-space: pre-wrap;
+    min-height: 0;
+  }
+
+  /* EMPTY STATE */
+  .empty-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    gap: 12px;
+    color: var(--text3);
+  }
+
+  .empty-icon {
+    font-size: 48px;
+    opacity: 0.3;
+  }
+
+  .empty-text {
+    font-family: var(--mono);
+    font-size: 13px;
+    letter-spacing: 0.05em;
+  }
+
+  /* LOADING */
+  .loading-bar {
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent));
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+    border-radius: 1px;
+  }
+
+  @keyframes shimmer {
+    0% { background-position: 200% 0; }
+    100% { background-position: -200% 0; }
+  }
+
+  /* TOAST */
+  .toast {
+    position: fixed;
+    bottom: 24px;
+    right: 24px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px 20px;
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--text);
+    z-index: 1000;
+    animation: slideUp 0.3s ease;
+    display: none;
+  }
+
+  .toast.show { display: block; }
+  .toast.success { border-color: var(--success); color: var(--success); }
+  .toast.error { border-color: var(--danger); color: var(--danger); }
+
+  @keyframes slideUp {
+    from { transform: translateY(20px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+  }
+
+  /* SCROLLBAR */
+  ::-webkit-scrollbar { width: 4px; height: 4px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+</style>
+</head>
+<body>
+
+<!-- HEADER -->
+<header>
+  <div class="logo">
+    <div class="logo-icon">⚡</div>
+    RAG // TECHNICAL INTELLIGENCE
+  </div>
+  <div class="status-bar">
+    <div class="status-dot">
+      <div class="dot offline" id="vllm-dot"></div>
+      LLM
+    </div>
+    <div class="status-dot">
+      <div class="dot offline" id="qdrant-dot"></div>
+      QDRANT
+    </div>
+    <div class="status-dot">
+      <div class="dot offline" id="redis-dot"></div>
+      REDIS
+    </div>
+  </div>
+</header>
+
+<!-- TABS -->
+<div class="tabs">
+  <div class="tab active" onclick="switchTab('chat')">💬 Chat</div>
+  <div class="tab" onclick="switchTab('qpaper')">📝 Question Paper</div>
+  <div class="tab" onclick="switchTab('prompt')">⚙️ Custom Prompt</div>
+</div>
+
+<!-- MAIN -->
+<div class="main">
+
+  <!-- ======= CHAT PANEL ======= -->
+  <div class="panel active" id="panel-chat">
+    <div class="chat-container">
+      <div class="messages" id="messages">
+        <div class="empty-state">
+          <div class="empty-icon">🔍</div>
+          <div class="empty-text">Ask anything about your technical documents</div>
+        </div>
+      </div>
+      <div class="chat-input-area">
+        <textarea
+          class="chat-input"
+          id="chat-input"
+          placeholder="Ask a technical question..."
+          rows="1"
+          onkeydown="handleChatKey(event)"
+          oninput="autoResize(this)"
+        ></textarea>
+        <button class="send-btn" id="send-btn" onclick="sendChat()">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+            <line x1="22" y1="2" x2="11" y2="13"></line>
+            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+          </svg>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ======= QUESTION PAPER PANEL ======= -->
+  <div class="panel" id="panel-qpaper">
+    <div class="qp-container">
+
+      <!-- FORM SIDE -->
+      <div class="qp-form">
+        <div class="section-title">// Paper Configuration</div>
+
+        <div class="form-group">
+          <div class="form-label">Topic / Subject Area</div>
+          <input type="text" class="form-input" id="qp-topic" placeholder="e.g. Engine Troubleshooting, Transfer Case...">
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Question Types</div>
+          <div class="checkbox-grid" id="qtype-grid">
+            <label class="checkbox-item" onclick="toggleCheck(this)">
+              <input type="checkbox" value="MCQ"> ✦ MCQ
+            </label>
+            <label class="checkbox-item" onclick="toggleCheck(this)">
+              <input type="checkbox" value="Short Answer"> ✦ Short Answer
+            </label>
+            <label class="checkbox-item" onclick="toggleCheck(this)">
+              <input type="checkbox" value="Long Answer"> ✦ Long Answer
+            </label>
+            <label class="checkbox-item" onclick="toggleCheck(this)">
+              <input type="checkbox" value="True/False"> ✦ True/False
+            </label>
+            <label class="checkbox-item" onclick="toggleCheck(this)">
+              <input type="checkbox" value="Fill in the Blanks"> ✦ Fill Blanks
+            </label>
+            <label class="checkbox-item" onclick="toggleCheck(this)">
+              <input type="checkbox" value="Diagram Based"> ✦ Diagram Based
+            </label>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Total Number of Questions</div>
+          <div class="slider-row">
+            <input type="range" class="form-slider" id="qp-count" min="5" max="50" value="15" oninput="document.getElementById('qp-count-val').textContent=this.value">
+            <div class="slider-val" id="qp-count-val">15</div>
+          </div>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Difficulty Level</div>
+          <select class="form-select" id="qp-difficulty">
+            <option value="Easy">Easy</option>
+            <option value="Medium" selected>Medium</option>
+            <option value="Hard">Hard</option>
+            <option value="Mixed">Mixed (Easy + Medium + Hard)</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Marks per Question</div>
+          <select class="form-select" id="qp-marks">
+            <option value="1">1 mark each</option>
+            <option value="2" selected>2 marks each</option>
+            <option value="5">5 marks each</option>
+            <option value="mixed">Mixed marks</option>
+          </select>
+        </div>
+
+        <div class="form-group">
+          <div class="form-label">Additional Instructions</div>
+          <textarea class="form-textarea" id="qp-instructions" placeholder="e.g. Focus on practical troubleshooting, include diagram references..."></textarea>
+        </div>
+
+        <button class="generate-btn" id="qp-btn" onclick="generatePaper()">
+          ⚡ Generate Question Paper
+        </button>
+      </div>
+
+      <!-- OUTPUT SIDE -->
+      <div class="qp-output">
+        <div class="section-title">// Generated Paper</div>
+        <div class="output-box" id="qp-output">
+          <div class="output-placeholder">Configure the paper parameters and click Generate to create a question paper from your technical documents.</div>
+        </div>
+        <div class="output-actions">
+          <button class="action-btn" onclick="copyOutput('qp-output')">📋 Copy</button>
+          <button class="action-btn" onclick="downloadPDF()">⬇ Download PDF</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ======= CUSTOM PROMPT PANEL ======= -->
+  <div class="panel" id="panel-prompt">
+    <div class="cp-container">
+
+      <div class="cp-top">
+        <!-- PROMPT INPUT -->
+        <div class="cp-left">
+          <div class="section-title">// Custom Prompt</div>
+          <textarea
+            class="prompt-textarea"
+            id="cp-prompt"
+            placeholder="Write your custom prompt here. The system will search your technical documents and answer based on relevant context..."
+          ></textarea>
+          <div class="params-grid">
+            <div class="param-group">
+              <div class="param-label">Max Tokens</div>
+              <input type="number" class="form-input" id="cp-tokens" value="512" min="64" max="2048">
+            </div>
+            <div class="param-group">
+              <div class="param-label">Temperature</div>
+              <input type="number" class="form-input" id="cp-temp" value="0.1" min="0" max="1" step="0.1">
+            </div>
+            <div class="param-group">
+              <div class="param-label">Top K Sources</div>
+              <input type="number" class="form-input" id="cp-topk" value="5" min="1" max="20">
+            </div>
+            <div class="param-group">
+              <div class="param-label">Mode</div>
+              <select class="form-select" id="cp-mode">
+                <option value="rag">RAG (with docs)</option>
+                <option value="direct">Direct LLM</option>
+              </select>
+            </div>
+          </div>
+          <button class="generate-btn" id="cp-btn" onclick="runPrompt()">
+            ⚡ Run Prompt
+          </button>
+        </div>
+
+        <!-- TEMPLATES -->
+        <div class="cp-right">
+          <div class="section-title">// Quick Templates</div>
+          <div class="template-grid">
+            <button class="template-btn" onclick="loadTemplate('summarize')">
+              📄 Summarize Document
+            </button>
+            <button class="template-btn" onclick="loadTemplate('compare')">
+              ⚖️ Compare Two Concepts
+            </button>
+            <button class="template-btn" onclick="loadTemplate('troubleshoot')">
+              🔧 Troubleshooting Guide
+            </button>
+            <button class="template-btn" onclick="loadTemplate('specs')">
+              📐 Extract Specifications
+            </button>
+            <button class="template-btn" onclick="loadTemplate('explain')">
+              💡 Explain Like I'm New
+            </button>
+            <button class="template-btn" onclick="loadTemplate('steps')">
+              🔢 Step-by-Step Procedure
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- OUTPUT -->
+      <div class="cp-output">
+        <div class="section-title">// Response</div>
+        <div class="cp-result" id="cp-result">
+          <div class="output-placeholder">Your custom prompt response will appear here.</div>
+        </div>
+        <div class="output-actions">
+          <button class="action-btn" onclick="copyOutput('cp-result')">📋 Copy</button>
+          <button class="action-btn" onclick="downloadOutput('cp-result', 'response.txt')">⬇ Download</button>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+</div>
+
+<!-- TOAST -->
+<div class="toast" id="toast"></div>
+
+<script>
+  const API = window.location.origin === 'null' 
+    ? 'http://localhost:9000'  // when opened as file
+    : window.location.origin;   // when served by FastAPI
+
+  // ===================== STATUS CHECK =====================
+  async function checkStatus() {
+    try {
+      const res = await fetch(`${API}/services`, { signal: AbortSignal.timeout(5000) });
+      const text = await res.text();
+      console.log("RAW RESPONSE:", text);
+
+      let data;
+      try { 
+        data = JSON.parse(text);
+      } catch {
+        throw new Error("Backend returned HTML instead of JSON");
+      }
+      document.getElementById('vllm-dot').className = 'dot ' + (data.vllm === 'ok' ? 'online' : 'offline');
+      document.getElementById('qdrant-dot').className = 'dot ' + (data.qdrant === 'ok' ? 'online' : 'offline');
+      document.getElementById('redis-dot').className = 'dot ' + (data.redis === 'ok' ? 'online' : 'offline');
+    } catch {}
+  }
+
+  checkStatus();
+  setInterval(checkStatus, 15000);
+
+  // ===================== TABS =====================
+  function switchTab(tab) {
+    document.querySelectorAll('.tab').forEach((t, i) => {
+      const tabs = ['chat', 'qpaper', 'prompt'];
+      t.classList.toggle('active', tabs[i] === tab);
+    });
+    document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
+    document.getElementById('panel-' + tab).classList.add('active');
+  }
+
+  // ===================== CHAT =====================
+  let chatHistory = [];
+  let chatLoading = false;
+
+  function autoResize(el) {
+    el.style.height = 'auto';
+    el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+  }
+
+  function handleChatKey(e) {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      sendChat();
+    }
+  }
+
+  async function sendChat() {
+    if (chatLoading) return;
+    const input = document.getElementById('chat-input');
+    const question = input.value.trim();
+    if (!question) return;
+
+    chatLoading = true;
+    input.value = '';
+    input.style.height = 'auto';
+    document.getElementById('send-btn').disabled = true;
+
+    const msgs = document.getElementById('messages');
+
+    // Clear empty state
+    const empty = msgs.querySelector('.empty-state');
+    if (empty) empty.remove();
+
+    // Add user message
+    msgs.innerHTML += `
+      <div class="message user">
+        <div class="avatar user-av">YOU</div>
+        <div class="bubble">${escapeHtml(question)}</div>
+      </div>
+    `;
+
+    // Add typing indicator
+    const typingId = 'typing-' + Date.now();
+    msgs.innerHTML += `
+      <div class="message bot" id="${typingId}">
+        <div class="avatar bot-av">RAG</div>
+        <div class="typing"><span></span><span></span><span></span></div>
+      </div>
+    `;
+    msgs.scrollTop = msgs.scrollHeight;
+
+    try {
+      const res = await fetch(`${API}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question, top_k: 5 })
+      });
+
+      const data = await res.json();
+      document.getElementById(typingId)?.remove();
+
+      if (!res.ok) throw new Error(data.detail || 'Query failed');
+
+      const verdict = data.verdict || 'UNKNOWN';
+      const verdictClass = verdict === 'PASS' ? 'pass' : 'fail';
+      const cached = data.cached ? '⚡ cached' : '';
+      const latency = data.latency_ms ? `${data.latency_ms}ms` : '';
+
+      const sourcesHtml = (data.sources || []).map((s, i) => `
+        <div class="source-item">
+          <div class="source-file">📄 ${s.source?.split('/').pop() || 'Document'} — Score: ${(s.reranker_score || 0).toFixed(3)}</div>
+          ${escapeHtml(s.text || '').substring(0, 180)}...
+        </div>
+      `).join('');
+
+      const scoresHtml = data.scores ? `
+        <div class="scores">
+          <div class="score-chip">Faith: ${(data.scores.faithfulness || 0).toFixed(2)}</div>
+          <div class="score-chip">Halluc: ${(data.scores.hallucination || 0).toFixed(2)}</div>
+          <div class="score-chip">Complete: ${(data.scores.completeness || 0).toFixed(2)}</div>
+        </div>
+      ` : '';
+
+      msgs.innerHTML += `
+        <div class="message bot">
+          <div class="avatar bot-av">RAG</div>
+          <div class="bubble">
+            <div class="verdict ${verdictClass}">● ${verdict} ${cached}</div>
+            ${escapeHtml(data.answer || 'No answer')}
+            ${data.sources?.length ? `
+              <div class="sources">
+                <div class="sources-label">Sources</div>
+                ${sourcesHtml}
+              </div>
+            ` : ''}
+            ${scoresHtml}
+            ${latency ? `<div class="latency">⏱ ${latency}</div>` : ''}
+          </div>
+        </div>
+      `;
+
+    } catch (err) {
+      document.getElementById(typingId)?.remove();
+      msgs.innerHTML += `
+        <div class="message bot">
+          <div class="avatar bot-av">RAG</div>
+          <div class="bubble" style="border-color: var(--danger);">
+            ❌ Error: ${escapeHtml(err.message)}
+          </div>
+        </div>
+      `;
+    }
+
+    msgs.scrollTop = msgs.scrollHeight;
+    chatLoading = false;
+    document.getElementById('send-btn').disabled = false;
+    input.focus();
+  }
+
+  // ===================== QUESTION PAPER =====================
+  function toggleCheck(label) {
+    label.classList.toggle('checked');
+  }
+
+  async function generatePaper() {
+    const topic = document.getElementById('qp-topic').value.trim();
+    if (!topic) { showToast('Please enter a topic', 'error'); return; }
+
+    const qtypes = Array.from(document.querySelectorAll('#qtype-grid input:checked'))
+    .map(i => {
+      const v = i.value.toLowerCase();
+      if (v.includes('mcq')) return 'mcq';
+      if (v.includes('short')) return 'short';
+      if (v.includes('long')) return 'long';
+      if (v.includes('true')) return 'true_false';
+      if (v.includes('fill')) return 'fill_blank';
+      return 'mcq';
+    });
+    if (!qtypes.length) { showToast('Select at least one question type', 'error'); return; }
+
+    const count = document.getElementById('qp-count').value;
+    const difficulty = document.getElementById('qp-difficulty').value;
+    const marks = document.getElementById('qp-marks').value;
+    const instructions = document.getElementById('qp-instructions').value;
+
+    const btn = document.getElementById('qp-btn');
+    const output = document.getElementById('qp-output');
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Generating...';
+    output.innerHTML = '<div class="loading-bar"></div>';
+
+    try {
+      const res = await fetch(`${API}/generate-paper`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+        topic: topic,
+        difficulty: difficulty,
+        num_questions: parseInt(count),
+        types: qtypes
+      })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Generation failed');
+
+      window.currentPaper = data.paper;
+      output.innerHTML = formatPaper(data.paper);
+      showToast('Question paper generated!', 'success');
+
+    } catch (err) {
+      output.textContent = `Error: ${err.message}`;
+      showToast('Generation failed', 'error');
+    }
+
+    btn.disabled = false;
+    btn.textContent = '⚡ Generate Question Paper';
+    console.log("Generated Paper:", data);
+  }
+
+  // ===================== CUSTOM PROMPT =====================
+  const templates = {
+    summarize: `Provide a comprehensive summary of the main topics covered in the documents. Include:
+- Key technical concepts
+- Important specifications and values
+- Main procedures or processes
+- Critical warnings or safety notes`,
+
+    compare: `Compare and contrast the following aspects found in the technical documents:
+[Concept 1]: ___
+[Concept 2]: ___
+
+Provide a structured comparison covering: specifications, applications, advantages, limitations.`,
+
+    troubleshoot: `Create a systematic troubleshooting guide for: [PROBLEM/SYMPTOM]
+
+Structure it as:
+1. Possible causes (most common to least common)
+2. Diagnostic steps
+3. Solutions for each cause
+4. Preventive measures`,
+
+    specs: `Extract and organize all technical specifications from the documents related to: [COMPONENT/SYSTEM]
+
+Format as a structured table with: Parameter | Value | Unit | Notes`,
+
+    explain: `Explain the following concept in simple terms for someone new to the field: [CONCEPT]
+
+Include:
+- What it is and what it does
+- How it works (simplified)
+- Why it matters
+- Common issues to watch for`,
+
+    steps: `Provide a detailed step-by-step procedure for: [TASK/PROCEDURE]
+
+Format as:
+- Prerequisites and tools required
+- Safety precautions
+- Numbered steps with clear actions
+- Expected outcomes at each stage
+- Common mistakes to avoid`
+  };
+
+  function loadTemplate(type) {
+    document.getElementById('cp-prompt').value = templates[type];
+  }
+
+  async function runPrompt() {
+    const prompt = document.getElementById('cp-prompt').value.trim();
+    if (!prompt) { showToast('Please enter a prompt', 'error'); return; }
+
+    const tokens = parseInt(document.getElementById('cp-tokens').value) || 512;
+    const topk = parseInt(document.getElementById('cp-topk').value) || 5;
+
+    const btn = document.getElementById('cp-btn');
+    const result = document.getElementById('cp-result');
+
+    btn.disabled = true;
+    btn.textContent = '⏳ Processing...';
+    result.innerHTML = '<div class="loading-bar"></div>';
+
+    try {
+      const res = await fetch(`${API}/query`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ question: prompt, top_k: topk })
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.detail || 'Request failed');
+
+      let output = data.answer || 'No response';
+      if (data.latency_ms) output += `\n\n— Response time: ${data.latency_ms}ms`;
+      if (data.verdict) output += ` | Verdict: ${data.verdict}`;
+
+      result.textContent = output;
+      showToast('Prompt completed', 'success');
+
+    } catch (err) {
+      result.textContent = `Error: ${err.message}`;
+      showToast('Request failed', 'error');
+    }
+
+    btn.disabled = false;
+    btn.textContent = '⚡ Run Prompt';
+  }
+
+  // ===================== UTILITIES =====================
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function copyOutput(id) {
+    const text = document.getElementById(id).textContent;
+    navigator.clipboard.writeText(text).then(() => showToast('Copied!', 'success'));
+  }
+
+
+
+  function showToast(msg, type = '') {
+    const toast = document.getElementById('toast');
+    toast.textContent = msg;
+    toast.className = `toast show ${type}`;
+    setTimeout(() => { toast.className = 'toast'; }, 3000);
+  }
+
+  function formatPaper(paper) {
+  let html = `<h2 style="text-align:center;">Question Paper</h2><hr>`;
+
+  let qno = 1;
+
+  if (paper.mcq?.length) {
+    html += `<h3>Section A — MCQs</h3>`;
+    paper.mcq.forEach((q) => {
+      html += `<p><b>Q${qno++}.</b> ${q.question}</p>`;
+      q.options?.forEach(opt => {
+        html += `<div style="margin-left:20px;">• ${opt}</div>`;
+      });
+    });
+  }
+
+  if (paper.short?.length) {
+    html += `<h3>Section B — Short Answer</h3>`;
+    paper.short.forEach((q) => {
+      html += `<p><b>Q${qno++}.</b> ${q.question}</p>`;
+    });
+  }
+
+  if (paper.long?.length) {
+    html += `<h3>Section C — Long Answer</h3>`;
+    paper.long.forEach((q) => {
+      html += `<p><b>Q${qno++}.</b> ${q.question}</p>`;
+    });
+  }
+
+  return html;
+}
+async function downloadPDF() {
+  if (!window.currentPaper) {
+    showToast("Generate paper first", "error");
+    return;
+  }
+
+  try {
+    const res = await fetch(`${API}/download/pdf`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        paper: window.currentPaper,
+        topic: document.getElementById('qp-topic').value || "Question Paper",
+        difficulty: document.getElementById('qp-difficulty').value
+      })
+    });
+
+    if (!res.ok) throw new Error("PDF generation failed");
+
+    const blob = await res.blob();
+    const url = window.URL.createObjectURL(blob);
+
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "question_paper.pdf";
+    a.click();
+
+    showToast("PDF Downloaded!", "success");
+
+  } catch (err) {
+    showToast("Download failed", "error");
+    console.error(err);
+  }
+}
+</script>
+
+</body>
 </html>

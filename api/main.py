@@ -1,4 +1,3 @@
-print("🔥 RUNNING api/main.py")
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel
 from dotenv import load_dotenv
@@ -10,6 +9,9 @@ from fastapi.responses import FileResponse
 from utils.docx_generator import generate_docx
 from utils.pdf_generator import generate_pdf
 from fastapi.responses import FileResponse
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 load_dotenv()
 
@@ -20,11 +22,28 @@ VLLM_MODEL = os.getenv("VLLM_MODEL", "Qwen/Qwen2.5-14B-Instruct-AWQ")
 QDRANT_HOST = os.getenv("QDRANT_HOST", "http://localhost:6333")
 FAITHFULNESS_THRESHOLD = float(os.getenv("FAITHFULNESS_THRESHOLD", "0.8"))
 
-
+# Allow frontend to connect
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with your domain
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+# Serve frontend files
 @app.on_event("startup")
 async def startup():
     create_collection()
     print("✅ Qdrant ready")
+
+# ── SERVE FRONTEND ────────────────────────────────────
+@app.get("/")
+async def root():
+    return FileResponse("frontend/index.html")
+
+# Mount static files
+if os.path.exists("frontend"):
+    app.mount("/frontend", StaticFiles(directory="frontend"), name="static")
 
 class QueryRequest(BaseModel):
     question: str
