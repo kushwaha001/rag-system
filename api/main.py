@@ -62,6 +62,12 @@ class PaperRequest(BaseModel):
     num_questions: int
     types: list[str]
 
+class GenerateRequest(BaseModel):
+    prompt: str
+    top_k: int = 10
+    max_tokens: int = 2048
+    temperature: float = 0.3
+
 @app.get("/health")
 async def health():
     return {"status": "ok", "model": VLLM_MODEL}
@@ -195,7 +201,7 @@ Answer:"""
                 json={
                     "model": VLLM_MODEL,
                     "messages": [{"role": "user", "content": prompt}],
-                    "max_tokens": 512,
+                    "max_tokens": 2048,
                     "temperature": 0.1
                 }
             )
@@ -263,7 +269,7 @@ async def generate_paper(req: PaperRequest):
         if not raw_chunks:
             raise HTTPException(status_code=404, detail="No relevant content found")
 
-        # Deduplicate + clean
+        # Deduplicate
         seen = set()
         chunks = []
         for c in raw_chunks:
@@ -272,125 +278,142 @@ async def generate_paper(req: PaperRequest):
                 seen.add(text)
                 chunks.append(c)
 
-        context = "\n\n".join([c["text"] for c in chunks[:20]])
+        # Bigger context
+        context = "\n\n".join([c["text"] for c in chunks[:60]])
 
         # =========================
         # STEP 2 — DISTRIBUTION
         # =========================
         total = req.num_questions
 
-        mcq = int(total * 0.5) if "mcq" in req.types else 0
-        short = int(total * 0.3) if "short" in req.types else 0
-        long = total - (mcq + short)
+        # Normalize types: true_false/fill_blank → mcq, diagram → long
+        normalized_types = []
+        for t in req.types:
+            if t in ('mcq', 'true_false', 'fill_blank'):
+                if 'mcq' not in normalized_types:
+                    normalized_types.append('mcq')
+            elif t == 'short':
+                if 'short' not in normalized_types:
+                    normalized_types.append('short')
+            elif t in ('long', 'diagram'):
+                if 'long' not in normalized_types:
+                    normalized_types.append('long')
+        if not normalized_types:
+            normalized_types = ['mcq']
+
+        mcq = int(total * 0.5) if "mcq" in normalized_types else 0
+        short = int(total * 0.3) if "short" in normalized_types else 0
+        long = (total - mcq - short) if "long" in normalized_types else 0
+
+        # Redistribute any unallocated questions
+        unallocated = total - mcq - short - long
+        if unallocated > 0:
+            if "mcq" in normalized_types:
+                mcq += unallocated
+            elif "short" in normalized_types:
+                short += unallocated
+            else:
+                long += unallocated
 
         # =========================
-        # STEP 3 — PROMPT
+        # STEP 3 — BATCH GENERATION
         # =========================
-        prompt = f"""
+        import json
+
+        batch_size = 25
+        all_mcq, all_short, all_long = [], [], []
+
+        async with httpx.AsyncClient(timeout=120) as client:
+
+            for start in range(0, total, batch_size):
+                current_batch = min(batch_size, total - start)
+
+                print(f"🚀 Generating batch {start//batch_size + 1}")
+
+                b_mcq = int(current_batch * 0.5) if "mcq" in normalized_types else 0
+                b_short = int(current_batch * 0.3) if "short" in normalized_types else 0
+                b_long = (current_batch - b_mcq - b_short) if "long" in normalized_types else 0
+                b_unallocated = current_batch - b_mcq - b_short - b_long
+                if b_unallocated > 0:
+                    if "mcq" in normalized_types:
+                        b_mcq += b_unallocated
+                    elif "short" in normalized_types:
+                        b_short += b_unallocated
+                    else:
+                        b_long += b_unallocated
+
+                batch_prompt = f"""
 You are an expert exam paper setter.
 
-Generate a structured question paper.
-
-Requirements:
-- Topic: {req.topic}
-- Difficulty: {req.difficulty}
-- Total Questions: {req.num_questions}
+Generate EXACTLY {current_batch} questions.
 
 Breakdown:
-- MCQs: {mcq}
-- Short Answer: {short}
-- Long Answer: {long}
+- MCQs: {b_mcq}
+- Short Answer: {b_short}
+- Long Answer: {b_long}
 
 STRICT RULES:
 - Use ONLY the given context
-- Do NOT hallucinate
-- Avoid repetition
-- Questions must be technical
-
-Return ONLY valid JSON. No explanation.
+- No repetition
+- Return ONLY valid JSON
 
 FORMAT:
 {{
-  "mcq": [
-    {{
-      "question": "...",
-      "options": ["A", "B", "C", "D"],
-      "answer": "A"
-    }}
-  ],
-  "short": [
-    {{
-      "question": "...",
-      "answer": "..."
-    }}
-  ],
-  "long": [
-    {{
-      "question": "...",
-      "answer": "..."
-    }}
-  ]
+  "mcq": [...],
+  "short": [...],
+  "long": [...]
 }}
 
 Context:
 {context}
 """
 
-        # =========================
-        # STEP 4 — LLM CALL
-        # =========================
-        async with httpx.AsyncClient(timeout=120) as client:
-            response = await client.post(
-                f"{VLLM_HOST}/v1/chat/completions",
-                json={
-                    "model": VLLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
-                    "temperature": 0.3,
-                    "max_tokens": 1200
-                }
-            )
-
-        result = response.json()
-        output_text = result["choices"][0]["message"]["content"]
-
-        # =========================
-        # STEP 5 — SAFE JSON PARSE
-        # =========================
-        import json
-
-        def try_parse(text):
-            try:
-                return json.loads(text)
-            except:
-                return None
-
-        paper = try_parse(output_text)
-
-        # 🔥 Retry once if failed
-        if paper is None:
-            retry_prompt = prompt + "\n\nREMEMBER: OUTPUT ONLY JSON."
-            async with httpx.AsyncClient(timeout=120) as client:
                 response = await client.post(
                     f"{VLLM_HOST}/v1/chat/completions",
                     json={
                         "model": VLLM_MODEL,
-                        "messages": [{"role": "user", "content": retry_prompt}],
-                        "temperature": 0.2,
-                        "max_tokens": 1200
+                        "messages": [{"role": "user", "content": batch_prompt}],
+                        "temperature": 0.3,
+                        "max_tokens": 4096
                     }
                 )
-            result = response.json()
-            output_text = result["choices"][0]["message"]["content"]
-            paper = try_parse(output_text)
 
-        if paper is None:
-            paper = {
-                "error": "Failed to generate structured paper",
-                "raw_output": output_text[:1000]
-            }
+                result = response.json()
+                output_text = result["choices"][0]["message"]["content"]
+
+                import re
+
+                def extract_json(text):
+                    match = re.search(r"\{.*\}", text, re.DOTALL)
+                    return match.group(0) if match else None
+
+                clean = extract_json(output_text)
+
+                if not clean:
+                    print("❌ NO JSON FOUND:\n", output_text[:300])
+                    continue
+
+                try:
+                    batch_paper = json.loads(clean)
+                except Exception as e:
+                    print("❌ JSON ERROR:", e)
+                    print("❌ RAW OUTPUT:\n", output_text[:300])
+                    continue
+                all_mcq.extend(batch_paper.get("mcq", []))
+                all_short.extend(batch_paper.get("short", []))
+                all_long.extend(batch_paper.get("long", []))
 
         # =========================
-        # RESPONSE
+        # STEP 4 — MERGE RESULTS
+        # =========================
+        paper = {
+            "mcq": all_mcq[:mcq],
+            "short": all_short[:short],
+            "long": all_long[:long]
+        }
+
+        # =========================
+        # FINAL RESPONSE
         # =========================
         return {
             "topic": req.topic,
@@ -402,6 +425,52 @@ Context:
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
+
+
+@app.post("/generate")
+async def generate(req: GenerateRequest):
+    try:
+        from utils.embeddings import get_embedding_service
+        from retrieval.search import retrieve
+
+        # Retrieve relevant chunks
+        chunks = retrieve(req.prompt, top_k=req.top_k)
+
+        context = "\n\n".join([
+            f"[Source {i+1}]: {c['text']}"
+            for i, c in enumerate(chunks[:req.top_k])
+        ])
+
+        prompt = f"""You are a helpful technical assistant. Use the following context to answer.
+
+Context:
+{context}
+
+Task: {req.prompt}
+
+Response:"""
+
+        async with httpx.AsyncClient(timeout=120) as client:
+            response = await client.post(
+                f"{VLLM_HOST}/v1/chat/completions",
+                json={
+                    "model": VLLM_MODEL,
+                    "messages": [{"role": "user", "content": prompt}],
+                    "max_tokens": req.max_tokens,
+                    "temperature": req.temperature
+                }
+            )
+            result = response.json()
+            answer = result["choices"][0]["message"]["content"]
+
+        return {
+            "answer": answer,
+            "sources": [{"text": c["text"][:200], "source": c["source"]} for c in chunks],
+            "status": "success"
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.post("/download/docx")
 async def download_docx(data: dict):
