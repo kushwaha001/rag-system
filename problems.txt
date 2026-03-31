@@ -1,0 +1,456 @@
+================================================================
+PROBLEMS SOLVED — RAG SYSTEM DEVELOPMENT LOG
+================================================================
+
+----------------------------------------------------------------
+1. Docker Compose — Volume Path Mismatch
+----------------------------------------------------------------
+FILE: docker-compose.yml
+
+PROBLEM:
+Qdrant container was mounting ./qdrant_storage but existing vector
+data was stored in ./qdrant_data, so the container started empty
+every time and all ingested documents were lost.
+
+FIX:
+Changed bind mount to named Docker volume for portability.
+Also added health checks so rag-api waits for all services to be
+ready before starting, and used ${VLLM_MODEL} env variable so the
+model can be changed via .env without editing the compose file.
+
+BEFORE:
+  volumes:
+    - ./qdrant_storage:/qdrant/storage
+
+AFTER:
+  volumes:
+    - qdrant_data:/qdrant/storage
+  healthcheck:
+    test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+    interval: 10s
+    retries: 5
+
+----------------------------------------------------------------
+2. Missing .dockerignore
+----------------------------------------------------------------
+FILE: .dockerignore (new file)
+
+PROBLEM:
+Docker was copying .venv/ (~10,000 files) and
+frontend/node_modules/ (~49,000 files) into the image, making
+builds extremely slow and the image unnecessarily large.
+
+FIX:
+Created .dockerignore to exclude all non-essential files.
+
+CONTENT ADDED:
+  .venv/
+  frontend/node_modules/
+  qdrant_data/
+  __pycache__/
+  *.pyc
+  .env
+
+----------------------------------------------------------------
+3. Removed Irrelevant / Boilerplate Files
+----------------------------------------------------------------
+FILES REMOVED:
+  - frontend/src/App.css      (not imported anywhere in App.jsx)
+  - frontend/src/assets/react.svg  (unused Vite boilerplate logo)
+  - frontend/src/assets/vite.svg   (unused Vite boilerplate logo)
+  - frontend/src/assets/hero.png   (unused hero image)
+  - frontend/README.md        (default Vite README, not project docs)
+  - 26.0.1                    (mystery version file, irrelevant)
+  - paper.pdf / paper.json    (leftover test documents)
+
+PROBLEM:
+Vite scaffold files left over from project setup were cluttering
+the repo and confusing anyone reading the codebase.
+
+FIX:
+Deleted all files that were not imported or used anywhere.
+
+----------------------------------------------------------------
+4. Embedding Model Running on CPU
+----------------------------------------------------------------
+FILE: utils/embeddings.py
+
+PROBLEM:
+BGE embedding model was hardcoded to CPU with fp32 precision,
+making every query slow (~500ms just for embedding alone).
+
+BEFORE:
+  self.model = FlagModel(
+      'BAAI/bge-large-en-v1.5',
+      use_fp16=False,
+      devices=["cpu"]
+  )
+
+AFTER:
+  device = "cuda:1" if torch.cuda.device_count() > 1 else "cuda:0"
+  self.model = FlagModel(
+      'BAAI/bge-large-en-v1.5',
+      use_fp16=torch.cuda.is_available(),
+      devices=[device]
+  )
+
+NOTE: cuda:1 chosen to avoid competing with vLLM which occupies
+GPU 0. fp16 on GPU gives ~25x speedup over fp32 on CPU.
+
+RESULT: Embedding latency dropped from ~500ms to ~20ms.
+
+----------------------------------------------------------------
+5. Duplicate Embedding Computation in /query
+----------------------------------------------------------------
+FILE: api/main.py
+
+PROBLEM:
+The /query endpoint computed an embedding at the top of the
+function and stored it in query_embedding, but this variable was
+never used. The retrieve() call internally computed the same
+embedding again — so every query was embedding twice for no reason.
+
+BEFORE:
+  embedding_service = get_embedding_service()
+  query_embedding = embedding_service.embed_query(req.question)  # unused
+  raw_chunks = retrieve(req.question, top_k=50)  # embeds again internally
+
+AFTER:
+  raw_chunks = retrieve(req.question, top_k=50)  # single embedding
+
+----------------------------------------------------------------
+6. Sequential Multi-Query Retrieval (4 CPU Calls)
+----------------------------------------------------------------
+FILE: retrieval/search.py
+
+PROBLEM:
+generate-paper called retrieve() 4 times sequentially for 4
+different query angles. Each call computed a separate embedding on
+CPU, making retrieval 4x slower than necessary.
+
+FIX:
+Added retrieve_multi() which embeds all 4 queries in a single
+batched GPU call, then queries Qdrant once per vector.
+
+BEFORE:
+  for q in queries:
+      chunks += retrieve(q, top_k=20)  # 4 separate CPU embeddings
+
+AFTER:
+  def retrieve_multi(queries, top_k):
+      vectors = embedding_service.model.encode_queries(queries)  # 1 GPU batch
+      for vector in vectors:
+          results = client.query_points(...)
+
+----------------------------------------------------------------
+7. Slow Sequential Question Generation (JSON Truncation)
+----------------------------------------------------------------
+FILE: api/main.py
+
+PROBLEM:
+All questions were generated in one large LLM call. The model had
+to produce long JSON with all questions in one response, which
+frequently got truncated mid-string because max_tokens was too
+small. Also took 40+ seconds for 10 questions.
+
+Root cause of truncation: context chunks from technical manuals
+were very long (1000-3000 tokens each). With 10 chunks in prompt,
+input tokens were huge, leaving very little room for output.
+
+FIX:
+Switched to parallel async generation — one request per question.
+vLLM's continuous batching processes all requests simultaneously.
+Each request generates only 1 question (max_tokens=512), so
+truncation is impossible and all questions complete in parallel.
+
+BEFORE:
+  # 1 big sequential call — wait 40s — often truncated
+  response = await client.post("/v1/chat/completions", json={
+      "messages": [prompt_with_all_10_questions],
+      "max_tokens": 4096
+  })
+
+AFTER:
+  async def generate_one(client, q_type, index):
+      # generates exactly 1 question, max_tokens=512
+      ...
+
+  results = await asyncio.gather(*[
+      generate_one(client, q_type, idx)
+      for idx, (q_type, i) in enumerate(tasks_spec)
+  ])
+
+RESULT: 10 questions went from ~40s sequential to ~8-12s parallel.
+
+----------------------------------------------------------------
+8. All MCQ Answers Were Option "a"
+----------------------------------------------------------------
+FILE: api/main.py
+
+PROBLEM:
+The prompt format example showed "answer": "a" literally, so the
+model copied that letter for every single question regardless of
+which option was actually correct.
+
+BEFORE:
+  prompt = '...Return ONLY this JSON:
+  {"question": "...", "answer": "a"}'  # model copied "a" every time
+
+AFTER:
+  correct = random.choice(["a", "b", "c", "d"])  # random per question
+  prompt = f'...The correct answer MUST be option "{correct}".
+  Place the correct answer text at option {correct}...'
+
+----------------------------------------------------------------
+9. Questions Not Grounded in Context (Hallucination)
+----------------------------------------------------------------
+FILE: api/main.py
+
+PROBLEM:
+presence_penalty and frequency_penalty penalised the model for
+reusing words from the context. Since context words are domain
+specific and repeat often, the model avoided them and generated
+questions from its training data instead of the documents.
+
+BEFORE:
+  "temperature": 0.85,
+  "presence_penalty": 0.5,   # pushed model away from context words
+  "frequency_penalty": 0.3,  # same problem — caused hallucination
+
+AFTER:
+  "temperature": 0.7,
+  # both penalties removed entirely
+  # prompt explicitly states:
+  # "ONLY from the context, do NOT use outside knowledge"
+
+----------------------------------------------------------------
+10. MCQ Options Not Showing in Browser
+----------------------------------------------------------------
+FILE: frontend/index.html
+
+PROBLEM:
+Frontend used (q.options || []).forEach() assuming options was an
+array. But the new parallel generation returns options as an object
+{"a": "...", "b": "...", "c": "...", "d": "..."}.
+Calling .forEach() on an object throws:
+  "q.options.forEach is not a function"
+
+BEFORE:
+  (q.options || []).forEach(opt => {
+      html += `• ${opt}`;
+  });
+
+AFTER:
+  Object.entries(q.options || {}).forEach(([key, opt]) => {
+      html += `<b>${key})</b> ${opt}`;
+  });
+
+----------------------------------------------------------------
+11. MCQ Options Not Showing in DOCX and PDF Downloads
+----------------------------------------------------------------
+FILES: utils/docx_generator.py, utils/pdf_generator.py
+
+PROBLEM:
+Same as above — both generators iterated options as a list using
+a for loop, which silently produces nothing when options is a dict.
+
+BEFORE (both files):
+  for opt in q.get("options", []):
+      doc.add_paragraph(f"  {opt}")  # never executes for a dict
+
+AFTER (both files):
+  for key, opt in (q.get("options") or {}).items():
+      doc.add_paragraph(f"  {key}) {opt}")
+
+----------------------------------------------------------------
+12. Answer Key Showing Only Letter, Not Option Text
+----------------------------------------------------------------
+FILES: utils/docx_generator.py, utils/pdf_generator.py,
+       frontend/index.html
+
+PROBLEM:
+The answer key displayed only the letter (e.g. "b") instead of
+the full correct answer text (e.g. "b) To distribute power to
+both front and rear axles"). The user could not verify answers
+without cross-referencing the question manually.
+
+BEFORE:
+  p.add_run(str(q.get("answer", "—")))  # shows: "b"
+
+AFTER:
+  ans_letter = str(q.get("answer", "—"))
+  ans_text = (q.get("options") or {}).get(ans_letter, "")
+  ans_display = f"{ans_letter}) {ans_text}" if ans_text else ans_letter
+  p.add_run(ans_display)  # shows: "b) To distribute power to both axles"
+
+Same logic applied in frontend/index.html for the browser view.
+
+----------------------------------------------------------------
+13. CUDA Out of Memory During Document Ingestion
+----------------------------------------------------------------
+FILE: ingestion/pipeline.py
+
+PROBLEM:
+RapidOCR (used by Docling for PDF OCR) tried to load onto GPU 0,
+which was already occupied by vLLM (22.5GB out of 24GB used).
+This caused torch.OutOfMemoryError and ingestion failed for all
+scanned PDFs.
+
+  torch.OutOfMemoryError: CUDA out of memory. Tried to allocate
+  20.00 MiB. GPU 0 has a total capacity of 23.53 GiB of which
+  30.81 MiB is free.
+
+FIX:
+Stop vLLM before running ingestion to free GPU memory, then
+restart vLLM after ingestion completes.
+
+Also added a filter to skip Microsoft Office temp/lock files
+(files starting with ~$) which are not real documents and caused
+a BadZipFile error when Docling tried to parse them.
+
+ADDED TO ingest_folder():
+  if f.startswith('~$'):   # skip Office temp/lock files
+      continue
+
+----------------------------------------------------------------
+14. qdrant_data Tracked by Git
+----------------------------------------------------------------
+FILE: .gitignore
+
+PROBLEM:
+Vector database binary files (.mmap, .dat, WAL logs, segment files)
+were being tracked by git. These are large binary files that change
+on every ingestion operation and should never be in version control.
+They also contain user data, not source code.
+
+FIX:
+Added qdrant_data/ to .gitignore and removed all tracked files
+from git history using git rm --cached.
+
+ADDED TO .gitignore:
+  qdrant_data/
+
+----------------------------------------------------------------
+15. No Deployment Documentation
+----------------------------------------------------------------
+FILE: README.md (complete rewrite)
+
+PROBLEM:
+No instructions existed for deploying the system on a new machine.
+Anyone cloning the repo had no idea how to set it up.
+
+FIX:
+Wrote a complete README covering:
+  - System requirements (GPU VRAM, RAM, storage, CUDA version)
+  - Option A: Full Docker deployment from scratch
+      - Install Docker
+      - Install Docker Compose plugin
+      - Install NVIDIA Container Toolkit
+      - Verify GPU access in Docker
+      - Build and run with docker compose up
+  - Option B: Manual local deployment
+      - Python venv setup
+      - Start Qdrant and Redis via Docker
+      - Start vLLM with correct flags
+      - Start uvicorn
+  - Public exposure via Cloudflare Tunnel
+  - Document ingestion curl commands
+  - Full API endpoint reference table
+  - Troubleshooting section for all common errors
+
+The reranker model (BAAI/bge-reranker-v2-m3) is fully implemented and loaded but never called. The code literally says:                                                                                  
+                                                                                                                                                                                                         
+  # STEP 3 — RERANK (DISABLED 🔥)                                                                                                                                                                          
+  for c in chunks:                                                                                                                                                                                         
+      c["reranker_score"] = c.get("rrf_score", c.get("score", 0.0))                                                                                                                                        
+                                                                                                                                                                                                           
+  A cross-encoder reranker scores each chunk together with the query — far more accurate than embedding similarity alone. Without it, wrong chunks end up in the context. This is responsible for most of  
+  the bad answers.                                                                                                                                                                                         
+                                                                                                                                                                                                           
+  ---                                                                                                                                                                                                      
+  2. RRF With Only One List = Useless
+                                                                                                                                                                                                           
+  File: retrieval/search.py (line 61)                                                                                                                                                                    
+                                                                                                                                                                                                           
+  fused_results = reciprocal_rank_fusion([dense_results])  # only 1 list!                                                                                                                                  
+                                                                                                                                                                                                           
+  RRF is designed to merge multiple independent ranking systems (e.g., dense + sparse). With a single list it's just a passthrough — adds zero value.                                                      
+                                                                                                                                                                                                           
+  ---                                                                                                                                                                                                      
+  3. Only Dense Search — No Keyword/BM25 Search                                                                                                                                                          
+                                                                                                                                                                                                           
+  File: retrieval/search.py
+                                                                                                                                                                                                           
+  Only embedding-based retrieval exists. For technical documents with acronyms (ABS, VARICOR, SRS), part numbers, and exact terms, keyword search is essential. Dense search alone misses exact term       
+  matches.                                                                                                                                                                                                 
+                                                                                                                                                                                                           
+  ---                                                                                                                                                                                                    
+  4. Chunk Size Too Large
+                                                                                                                                                                                                           
+  File: ingestion/pipeline.py (line 27)
+                                                                                                                                                                                                           
+  def chunk_text(text: str, chunk_size: int = 512, overlap: int = 50):                                                                                                                                     
+                                                                                                                                                                                                           
+  - 512 words ≈ 2000+ characters — too large, mixes multiple topics in one chunk                                                                                                                           
+  - 50-word overlap = only 9.7% — too small, meaning is lost at boundaries                                                                                                                                 
+  - Should be: chunk_size=256, overlap=100 (40% overlap)                                                                                                                                                   
+                                                                                                                                                                                                           
+  ---                                                                                                                                                                                                      
+  5. Retrieves 50 Chunks But Uses Only 8                                                                                                                                                                   
+                                                                                                                                                                                                           
+  File: api/main.py (lines 144, 166)
+                                                                                                                                                                                                           
+  raw_chunks = retrieve(req.question, top_k=50)  # fetches 50                                                                                                                                              
+  ...                                                                                                                                                                                                      
+  chunks = chunks[:8]  # uses only 8                                                                                                                                                                       
+                                                                                                                                                                                                           
+  Retrieving 50 then throwing away 42 is wasteful. Without a reranker doing the filtering, this also means the 8 kept are just the 8 with highest embedding scores — not necessarily the most relevant.    
+                                                                                                                                                                                                           
+  ---                                                                                                                                                                                                      
+  6. Weak Query Prompt                                                                                                                                                                                   
+                                                                                                                                                                                                           
+  File: api/main.py (line 179)
+                  prompt = f"""You are a helpful assistant. Answer ONLY using the provided context.                                                                                                                      
+  Always cite sources like [Source 1].                                                                                                                                                                     
+  ...                                                                                                                                                                                                      
+                                                                                                                                                                                                           
+  No system message, no structure guidance, no instruction on what to do when the answer isn't in the context. The LLM often guesses instead of saying "not found".                                        
+                                                                                                                                                                                                           
+  ---                                                                                                                                                                                                      
+  7. Bad Answers Still Returned                                                                                                                                                                          
+                                                                                                                                                                                                           
+  File: api/main.py (line 241)
+                                                                                                                                                                                                           
+  if verdict != "PASS" or faithfulness < FAITHFULNESS_THRESHOLD:                                                                                                                                         
+      final_response["reason"] = evaluation.get("reason", "Low quality response")                                                                                                                          
+                                                                                                                                                                                                           
+  When the evaluator flags a bad answer, it still gets returned to the user — just with a warning message added. No retry, no fallback.                                                                    
+                                                                                                                                                                                                           
+  ---                                                                                                                                                                                                      
+  8. Cache Similarity Threshold Too Strict                                                                                                                                                               
+                                          
+  File: utils/cache.py (line 13, from .env)
+                                                                                                                                                                                                           
+  SIMILARITY_THRESHOLD=0.95
+                                                                                                                                                                                                           
+  0.95 cosine similarity means two queries must be nearly identical to get a cache hit. In practice the cache almost never fires. 0.85 would be more useful.                                               
+   
+  ---                                                                                                                                                                                                      
+  Priority Order to Fix                                                                                                                                                                                  
+                                                                                                                                                                                                           
+  ┌──────────┬─────────────────────────────────────────────┬────────────────────────────────────┐
+  │ Priority │                   Problem                   │       Expected Quality Gain        │                                                                                                          
+  ├──────────┼─────────────────────────────────────────────┼────────────────────────────────────┤                                                                                                          
+  │ 1        │ Enable reranker                             │ Very High — fixes most bad answers │                                                                                                          
+  ├──────────┼─────────────────────────────────────────────┼────────────────────────────────────┤                                                                                                          
+  │ 2        │ Reduce chunk size (512→256, overlap 50→100) │ High — better retrieval precision  │                                                                                                          
+  ├──────────┼─────────────────────────────────────────────┼────────────────────────────────────┤                                                                                                          
+  │ 3        │ Add sparse/BM25 search for hybrid retrieval │ High — fixes exact term misses     │                                                                                                          
+  ├──────────┼─────────────────────────────────────────────┼────────────────────────────────────┤                                                                                                          
+  │ 4        │ Improve query prompt                        │ Medium                             │                                                                                                        
+  ├──────────┼─────────────────────────────────────────────┼────────────────────────────────────┤                                                                                                          
+  │ 5        │ Lower cache threshold (0.95→0.85)           │ Low                                │                                                                                                        
+  └──────────┴─────────────────────────────────────────────┴────────────────────────────────────┘                         
+================================================================
+END OF PROBLEM LOG
+================================================================

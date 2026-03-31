@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from utils.qdrant_setup import create_collection
@@ -10,10 +10,11 @@ import json
 from fastapi.responses import FileResponse
 from utils.docx_generator import generate_docx
 from utils.pdf_generator import generate_pdf
-from fastapi.responses import FileResponse
-from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+
+UPLOAD_DIR = "/tmp/rag_uploads"
+os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 load_dotenv()
 
@@ -132,6 +133,143 @@ async def ingest_folder_endpoint(req: FolderIngestRequest):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/ingestion-status")
+async def ingestion_status(folder_path: str):
+    try:
+        from ingestion.pipeline import get_ingested_files, SUPPORTED_EXTENSIONS
+
+        if not os.path.isdir(folder_path):
+            raise HTTPException(status_code=400, detail=f"Folder not found: {folder_path}")
+
+        all_files = []
+        for root, _, files in os.walk(folder_path):
+            for f in files:
+                if f.startswith("~$"):
+                    continue
+                if os.path.splitext(f)[1].lower() in SUPPORTED_EXTENSIONS:
+                    all_files.append(os.path.join(root, f))
+
+        ingested = get_ingested_files()
+
+        ingested_files = sorted([f for f in all_files if f in ingested])
+        pending_files  = sorted([f for f in all_files if f not in ingested])
+
+        return {
+            "folder": folder_path,
+            "total": len(all_files),
+            "ingested_count": len(ingested_files),
+            "pending_count": len(pending_files),
+            "ingested": ingested_files,
+            "pending": pending_files,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/upload")
+async def upload_document(
+    file: UploadFile = File(...),
+    section: str = Form("chat")
+):
+    if section not in ("chat", "paper", "prompt"):
+        raise HTTPException(status_code=400, detail="section must be chat, paper, or prompt")
+
+    ext = os.path.splitext(file.filename)[1].lower()
+    allowed = {'.pdf', '.docx', '.pptx', '.md', '.txt', '.html', '.csv'}
+    if ext not in allowed:
+        raise HTTPException(status_code=400, detail=f"Unsupported file type: {ext}")
+
+    section_dir = os.path.join(UPLOAD_DIR, section)
+    os.makedirs(section_dir, exist_ok=True)
+    filepath = os.path.join(section_dir, file.filename)
+
+    content = await file.read()
+    with open(filepath, "wb") as f:
+        f.write(content)
+
+    try:
+        from ingestion.pipeline import ingest_document
+        result = ingest_document(filepath, section=section)
+        result["section"] = section
+        result["filename"] = file.filename
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/documents")
+async def list_documents(section: str = None):
+    try:
+        from utils.qdrant_setup import get_qdrant_client, COLLECTION_NAME
+        client = get_qdrant_client()
+
+        docs = {}
+        offset = None
+
+        while True:
+            results, offset = client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=1000,
+                offset=offset,
+                with_payload=["source", "filename", "section"]
+            )
+
+            for r in results:
+                if not r.payload:
+                    continue
+                source = r.payload.get("source", "")
+                doc_section = r.payload.get("section", "all")
+                filename = r.payload.get("filename", source.split("/")[-1])
+
+                if section and doc_section != section:
+                    continue
+
+                if source not in docs:
+                    docs[source] = {
+                        "source": source,
+                        "filename": filename,
+                        "section": doc_section,
+                        "chunk_count": 0
+                    }
+                docs[source]["chunk_count"] += 1
+
+            if offset is None:
+                break
+
+        return {"documents": list(docs.values())}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.delete("/documents")
+async def delete_document(source: str):
+    try:
+        from utils.qdrant_setup import get_qdrant_client, COLLECTION_NAME
+        from qdrant_client.models import FilterSelector, Filter, FieldCondition, MatchValue
+
+        client = get_qdrant_client()
+        client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=FilterSelector(
+                filter=Filter(
+                    must=[FieldCondition(key="source", match=MatchValue(value=source))]
+                )
+            )
+        )
+
+        if source.startswith(UPLOAD_DIR):
+            try:
+                os.remove(source)
+            except Exception:
+                pass
+
+        return {"status": "deleted", "source": source}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.post("/query")
 async def query(req: QueryRequest):
     try:
@@ -158,40 +296,52 @@ async def query(req: QueryRequest):
                 chunks.append(c)
 
         # =========================
-        # STEP 3 — RERANK (DISABLED 🔥)
+        # STEP 3 — RERANK + PATH BOOST
         # =========================
-        for c in chunks:
-            c["reranker_score"] = c.get("rrf_score", c.get("score", 0.0))
-
-        chunks = chunks[:8]
+        try:
+            from utils.reranker import get_reranker
+            from retrieval.search import path_boost_after_rerank
+            reranker = get_reranker()
+            # Get wider pool from reranker so path_boost has room to promote right docs
+            chunks = reranker.rerank(req.question, chunks, top_k=15)
+            # Boost chunks whose file path matches query keywords (model codes etc.)
+            # This corrects cases where a different vehicle's manual scores high on text alone
+            chunks = path_boost_after_rerank(req.question, chunks)
+            chunks = chunks[:5]
+        except Exception as rerank_err:
+            print(f"⚠️ Reranker failed: {rerank_err} — falling back to RRF score ranking")
+            from retrieval.search import path_boost_after_rerank
+            chunks = sorted(chunks, key=lambda x: x.get("rrf_score", x.get("score", 0)), reverse=True)[:15]
+            chunks = path_boost_after_rerank(req.question, chunks)[:5]
 
         # =========================
         # STEP 4 — BUILD CONTEXT
         # =========================
         context = "\n\n".join([
-            f"[Source {i+1} | Score: {c['reranker_score']:.2f}]\n{c['text']}"
+            f"[Source {i+1}]\n{c['text']}"
             for i, c in enumerate(chunks)
         ])
 
         # =========================
         # STEP 5 — LLM CALL
         # =========================
-        prompt = f"""You are a helpful assistant. Answer ONLY using the provided context.
-Always cite sources like [Source 1].
-
-Context:
-{context}
-
-Question: {req.question}
-
-Answer:"""
+        system_msg = (
+            "You are a precise technical assistant. Answer questions based ONLY on the "
+            "provided context. If the context does not contain enough information to answer "
+            "the question, say: 'I don't have enough information in the provided documents "
+            "to answer this.' Do not use outside knowledge. Cite sources using [Source N] notation."
+        )
+        user_msg = f"Context:\n{context}\n\nQuestion: {req.question}\n\nAnswer based only on the context above:"
 
         async with httpx.AsyncClient(timeout=60) as client:
             response = await client.post(
                 f"{VLLM_HOST}/v1/chat/completions",
                 json={
                     "model": VLLM_MODEL,
-                    "messages": [{"role": "user", "content": prompt}],
+                    "messages": [
+                        {"role": "system", "content": system_msg},
+                        {"role": "user", "content": user_msg}
+                    ],
                     "max_tokens": 2048,
                     "temperature": 0.1
                 }
@@ -269,8 +419,34 @@ async def generate_paper(req: PaperRequest):
         if not all_chunks:
             raise HTTPException(status_code=404, detail="No relevant content found")
 
-        # Shuffle so each generation run uses chunks in a different order
-        random.shuffle(all_chunks)
+        # =========================
+        # FILTER — drop chunks below relevance threshold (removes wrong documents)
+        # =========================
+        MIN_SCORE = 0.45
+        all_chunks = [c for c in all_chunks if c.get("score", 0) >= MIN_SCORE]
+
+        if not all_chunks:
+            raise HTTPException(
+                status_code=404,
+                detail=f"No documents found relevant enough to '{req.topic}'. Try a different topic or upload relevant documents."
+            )
+
+        # =========================
+        # RERANK — sort by cross-encoder score against the topic so the most
+        # relevant chunks are at the front of the list
+        # =========================
+        try:
+            from utils.reranker import get_reranker
+            from retrieval.search import path_boost_after_rerank
+            reranker = get_reranker()
+            all_chunks = reranker.rerank(req.topic, all_chunks, top_k=min(60, len(all_chunks)))
+            all_chunks = path_boost_after_rerank(req.topic, all_chunks)
+            all_chunks = all_chunks[:40]
+        except Exception as rerank_err:
+            print(f"⚠️ Reranker failed for paper: {rerank_err}")
+            from retrieval.search import path_boost_after_rerank
+            all_chunks = sorted(all_chunks, key=lambda x: x.get("score", 0), reverse=True)[:60]
+            all_chunks = path_boost_after_rerank(req.topic, all_chunks)[:40]
 
         # =========================
         # STEP 2 — DISTRIBUTION
@@ -321,7 +497,10 @@ async def generate_paper(req: PaperRequest):
         answer_letters = ["a", "b", "c", "d"]
 
         def build_prompt(q_type: str, index: int) -> str:
-            chunk_start = (index * 3) % len(all_chunks)
+            # Rotate only within the top half of reranked chunks (all highly relevant)
+            # This gives variety across questions while never touching low-relevance chunks
+            pool_size = max(3, len(all_chunks) // 2)
+            chunk_start = (index * 2) % pool_size
             ctx_chunks = all_chunks[chunk_start:chunk_start + 3]
             if len(ctx_chunks) < 3:
                 ctx_chunks += all_chunks[:3 - len(ctx_chunks)]
@@ -430,10 +609,19 @@ Context:
         # =========================
         # FINAL RESPONSE
         # =========================
+        unique_sources = list({
+            c.get("source", "") for c in all_chunks if c.get("source")
+        })
+        sources = [
+            {"filename": s.split("/")[-1], "source": s}
+            for s in unique_sources
+        ]
+
         return {
             "topic": req.topic,
             "difficulty": req.difficulty,
             "paper": paper,
+            "sources": sources,
             "latency_ms": round((time.time() - start_time) * 1000)
         }
 

@@ -104,8 +104,8 @@ def generate_pdf(paper_data: dict, topic: str, difficulty: str) -> str:
         elements.append(Paragraph("Section A — Multiple Choice Questions", section_style))
         for q in paper_data["mcq"]:
             elements.append(Paragraph(f"<b>Q{qno}.</b> {q.get('question', '')}", question_style))
-            for opt in q.get("options", []):
-                elements.append(Paragraph(opt, option_style))
+            for key, opt in (q.get("options") or {}).items():
+                elements.append(Paragraph(f"{key}) {opt}", option_style))
             elements.append(Spacer(1, 6))
             qno += 1
 
@@ -138,8 +138,11 @@ def generate_pdf(paper_data: dict, topic: str, difficulty: str) -> str:
     if paper_data.get("mcq"):
         elements.append(Paragraph("Section A — MCQ Answers", section_style))
         for q in paper_data["mcq"]:
+            ans_letter = str(q.get("answer", "—"))
+            ans_text = (q.get("options") or {}).get(ans_letter, "")
+            ans_display = f"{ans_letter}) {ans_text}" if ans_text else ans_letter
             elements.append(Paragraph(
-                f"<b>Q{qno}.</b> {q.get('answer', '—')}",
+                f"<b>Q{qno}.</b> {ans_display}",
                 answer_style
             ))
             qno += 1

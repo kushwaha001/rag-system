@@ -373,10 +373,52 @@
   .qp-output {
     flex: 1;
     padding: 24px;
-    overflow-y: auto;
     display: flex;
     flex-direction: column;
+    overflow: hidden;
+    min-height: 0;
   }
+
+  /* Tab bar inside QP output */
+  .qp-view-tabs {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+    margin-bottom: 14px;
+    flex-shrink: 0;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 12px;
+  }
+
+  .qp-view-tab {
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 16px;
+    font-family: var(--mono);
+    font-size: 11px;
+    font-weight: 500;
+    color: var(--text3);
+    cursor: pointer;
+    transition: all 0.2s;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+
+  .qp-view-tab:hover { color: var(--text2); border-color: var(--text3); }
+  .qp-view-tab.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .qp-view-tab.answers-tab.active { background: var(--success); border-color: var(--success); }
+  .qp-view-tab.sources-tab.active { background: var(--accent2); border-color: var(--accent2); }
+
+  .qp-view-panel {
+    display: none;
+    flex: 1;
+    overflow-y: auto;
+    min-height: 0;
+    flex-direction: column;
+  }
+
+  .qp-view-panel.active { display: flex; }
 
   .section-title {
     font-family: var(--mono);
@@ -956,6 +998,183 @@
   ::-webkit-scrollbar { width: 4px; height: 4px; }
   ::-webkit-scrollbar-track { background: transparent; }
   ::-webkit-scrollbar-thumb { background: var(--border); border-radius: 2px; }
+
+  /* ===================== DOCUMENT UPLOAD ===================== */
+  .docs-section {
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .docs-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: var(--bg3);
+    cursor: pointer;
+    user-select: none;
+    transition: background 0.2s;
+  }
+
+  .docs-header:hover { background: #1e1e2e; }
+
+  .docs-header-left {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+  }
+
+  .docs-count-badge {
+    background: var(--bg2);
+    border: 1px solid var(--accent);
+    border-radius: 10px;
+    padding: 1px 7px;
+    font-size: 10px;
+    color: var(--accent);
+    min-width: 20px;
+    text-align: center;
+  }
+
+  .docs-toggle-arrow { font-size: 9px; color: var(--text3); transition: transform 0.2s; }
+
+  .docs-body { display: none; padding: 10px 12px; border-top: 1px solid var(--border); background: var(--bg2); }
+  .docs-body.open { display: block; }
+
+  .upload-zone {
+    border: 1px dashed var(--border);
+    border-radius: 6px;
+    padding: 10px 12px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s;
+    margin-bottom: 8px;
+    position: relative;
+  }
+
+  .upload-zone:hover { border-color: var(--accent); background: #4f9eff08; }
+  .upload-zone.dragover { border-color: var(--accent); background: #4f9eff15; }
+  .upload-zone input[type=file] { display: none; }
+
+  .upload-label {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--accent);
+    display: block;
+    margin-bottom: 2px;
+    pointer-events: none;
+  }
+
+  .upload-hint { font-size: 10px; color: var(--text3); font-family: var(--mono); pointer-events: none; }
+
+  .upload-progress {
+    height: 2px;
+    background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent));
+    background-size: 200% 100%;
+    animation: shimmer 1.2s infinite;
+    border-radius: 1px;
+    display: none;
+    margin-bottom: 8px;
+  }
+
+  .doc-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    max-height: 130px;
+    overflow-y: auto;
+  }
+
+  .doc-item {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--bg3);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 5px 8px;
+  }
+
+  .doc-name {
+    font-family: var(--mono);
+    font-size: 10px;
+    color: var(--text2);
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .doc-chunks { font-family: var(--mono); font-size: 9px; color: var(--text3); white-space: nowrap; }
+
+  .doc-del {
+    background: none;
+    border: none;
+    color: var(--danger);
+    cursor: pointer;
+    font-size: 11px;
+    padding: 0 2px;
+    opacity: 0.4;
+    transition: opacity 0.2s;
+    flex-shrink: 0;
+    line-height: 1;
+  }
+
+  .doc-del:hover { opacity: 1; }
+  .docs-empty { font-family: var(--mono); font-size: 10px; color: var(--text3); text-align: center; padding: 8px 0; }
+
+  /* Chat panel split layout */
+  .chat-split {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .chat-main {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  .chat-docs-sidebar {
+    width: 240px;
+    border-left: 1px solid var(--border);
+    display: flex;
+    flex-direction: column;
+    background: var(--bg2);
+    flex-shrink: 0;
+    overflow: hidden;
+  }
+
+  .chat-docs-title {
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--text2);
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    padding: 12px 14px 8px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+  }
+
+  .chat-docs-body {
+    padding: 10px 12px;
+    flex: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
 </style>
 </head>
 <body>
@@ -997,6 +1216,7 @@
   <div class="tab active" onclick="switchTab('chat')">💬 Chat</div>
   <div class="tab" onclick="switchTab('qpaper')">📝 Question Paper</div>
   <div class="tab" onclick="switchTab('prompt')">⚙️ Custom Prompt</div>
+  <div class="tab" onclick="switchTab('ingestion')">📊 Ingestion</div>
 </div>
 
 <!-- MAIN -->
@@ -1004,29 +1224,59 @@
 
   <!-- ======= CHAT PANEL ======= -->
   <div class="panel active" id="panel-chat">
-    <div class="chat-container">
-      <div class="messages" id="messages">
-        <div class="empty-state">
-          <div class="empty-icon">🔍</div>
-          <div class="empty-text">Ask anything about your technical documents</div>
+    <div class="chat-split">
+
+      <!-- Chat main area -->
+      <div class="chat-main">
+        <div class="messages" id="messages">
+          <div class="empty-state">
+            <div class="empty-icon">🔍</div>
+            <div class="empty-text">Ask anything about your technical documents</div>
+          </div>
+        </div>
+        <div class="chat-input-area">
+          <textarea
+            class="chat-input"
+            id="chat-input"
+            placeholder="Ask a technical question..."
+            rows="1"
+            onkeydown="handleChatKey(event)"
+            oninput="autoResize(this)"
+          ></textarea>
+          <button class="send-btn" id="send-btn" onclick="sendChat()">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+              <line x1="22" y1="2" x2="11" y2="13"></line>
+              <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
+            </svg>
+          </button>
         </div>
       </div>
-      <div class="chat-input-area">
-        <textarea
-          class="chat-input"
-          id="chat-input"
-          placeholder="Ask a technical question..."
-          rows="1"
-          onkeydown="handleChatKey(event)"
-          oninput="autoResize(this)"
-        ></textarea>
-        <button class="send-btn" id="send-btn" onclick="sendChat()">
-          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
-            <line x1="22" y1="2" x2="11" y2="13"></line>
-            <polygon points="22 2 15 22 11 13 2 9 22 2"></polygon>
-          </svg>
-        </button>
+
+      <!-- Documents sidebar -->
+      <div class="chat-docs-sidebar">
+        <div class="chat-docs-title">
+          📁 Knowledge Base
+          <span class="docs-count-badge" id="docs-count-chat">0</span>
+        </div>
+        <div class="chat-docs-body">
+          <div class="upload-zone" id="upload-zone-chat"
+            onclick="document.getElementById('file-input-chat').click()"
+            ondragover="handleDragOver(event,'chat')"
+            ondragleave="handleDragLeave('chat')"
+            ondrop="handleDrop(event,'chat')">
+            <input type="file" id="file-input-chat"
+              accept=".pdf,.docx,.pptx,.txt,.md,.html,.csv"
+              onchange="uploadFile('chat', this)">
+            <span class="upload-label">⬆ Upload Document</span>
+            <span class="upload-hint">PDF, DOCX, TXT, MD, CSV</span>
+          </div>
+          <div class="upload-progress" id="upload-progress-chat"></div>
+          <div class="doc-list" id="doc-list-chat">
+            <div class="docs-empty">No documents yet</div>
+          </div>
+        </div>
       </div>
+
     </div>
   </div>
 
@@ -1103,46 +1353,77 @@
         <button class="generate-btn" id="qp-btn" onclick="generatePaper()">
           ⚡ Generate Question Paper
         </button>
+
+        <!-- Document sources for this section -->
+        <div class="docs-section" style="margin-top:14px;">
+          <div class="docs-header" onclick="toggleDocs('paper')">
+            <div class="docs-header-left">
+              📁 Document Sources
+              <span class="docs-count-badge" id="docs-count-paper">0</span>
+            </div>
+            <span class="docs-toggle-arrow" id="docs-toggle-paper">▼</span>
+          </div>
+          <div class="docs-body" id="docs-body-paper">
+            <div class="upload-zone" id="upload-zone-paper"
+              onclick="document.getElementById('file-input-paper').click()"
+              ondragover="handleDragOver(event,'paper')"
+              ondragleave="handleDragLeave('paper')"
+              ondrop="handleDrop(event,'paper')">
+              <input type="file" id="file-input-paper"
+                accept=".pdf,.docx,.pptx,.txt,.md,.html,.csv"
+                onchange="uploadFile('paper', this)">
+              <span class="upload-label">⬆ Upload Document</span>
+              <span class="upload-hint">PDF, DOCX, TXT, MD, CSV</span>
+            </div>
+            <div class="upload-progress" id="upload-progress-paper"></div>
+            <div class="doc-list" id="doc-list-paper">
+              <div class="docs-empty">No documents yet</div>
+            </div>
+          </div>
+        </div>
+
       </div>
 
       <!-- OUTPUT SIDE -->
       <div class="qp-output">
-        <div class="section-title">// Generated Paper</div>
 
-        <!-- Questions Section -->
-        <div class="paper-section" id="qp-questions-box">
-          <div class="paper-section-header">
-            <span class="paper-section-label questions">📄 Question Paper</span>
-            <span style="font-family:var(--mono);font-size:10px;color:var(--text3);" id="qp-question-count"></span>
-          </div>
-          <div class="paper-content" id="qp-output">
-            <div class="output-placeholder">Configure the paper parameters and click Generate to create a question paper from your technical documents.</div>
+        <!-- Tab bar -->
+        <div class="qp-view-tabs">
+          <button class="qp-view-tab active" id="qptab-questions" onclick="switchQPView('questions')">📄 Questions</button>
+          <button class="qp-view-tab answers-tab" id="qptab-answers" onclick="switchQPView('answers')">🔑 Answer Key</button>
+          <button class="qp-view-tab sources-tab" id="qptab-sources" onclick="switchQPView('sources')">📁 Sources</button>
+          <span style="flex:1;"></span>
+          <span style="font-family:var(--mono);font-size:10px;color:var(--text3);" id="qp-question-count"></span>
+        </div>
+
+        <!-- Questions tab -->
+        <div class="qp-view-panel active" id="qpview-questions">
+          <div class="paper-content" id="qp-output" style="padding:0;min-height:0;flex:1;">
+            <div class="output-placeholder">Configure the paper and click Generate to create questions from your documents.</div>
           </div>
         </div>
 
-        <!-- Divider -->
-        <div class="paper-divider">
-          <div class="paper-divider-line"></div>
-          <div class="paper-divider-label">✦ Answer Key ✦</div>
-          <div class="paper-divider-line"></div>
-        </div>
-
-        <!-- Answer Key Section -->
-        <div class="paper-section" id="qp-answers-box" style="max-height:340px;">
-          <div class="paper-section-header">
-            <span class="paper-section-label answers">🔑 Answer Key</span>
-            <span style="font-family:var(--mono);font-size:10px;color:var(--text3);">Separate page in downloaded file</span>
-          </div>
-          <div class="paper-content" id="qp-answers">
+        <!-- Answer Key tab -->
+        <div class="qp-view-panel" id="qpview-answers">
+          <div class="paper-content" id="qp-answers" style="padding:0;min-height:0;flex:1;">
             <div class="output-placeholder">Answer key will appear here after generation.</div>
           </div>
         </div>
 
-        <div class="output-actions">
+        <!-- Sources tab -->
+        <div class="qp-view-panel" id="qpview-sources">
+          <div id="qp-sources" style="flex:1;padding:4px 0;">
+            <div class="output-placeholder">Sources will appear here after generation.</div>
+          </div>
+        </div>
+
+        <!-- Action buttons always visible at the bottom -->
+        <div class="output-actions" style="flex-shrink:0;border-top:1px solid var(--border);padding-top:14px;margin-top:14px;">
           <button class="action-btn" onclick="copyOutput('qp-output')">📋 Copy Questions</button>
           <button class="action-btn" onclick="downloadPDF()">⬇ PDF</button>
           <button class="action-btn" onclick="downloadDOCX()">⬇ DOCX</button>
         </div>
+
       </div>
 
     </div>
@@ -1224,6 +1505,37 @@
               <div class="saved-empty">No saved prompts yet</div>
             </div>
           </div>
+
+          <!-- Document sources for this section -->
+          <div style="margin-top:18px;">
+            <div class="docs-section">
+              <div class="docs-header" onclick="toggleDocs('prompt')">
+                <div class="docs-header-left">
+                  📁 Documents
+                  <span class="docs-count-badge" id="docs-count-prompt">0</span>
+                </div>
+                <span class="docs-toggle-arrow" id="docs-toggle-prompt">▼</span>
+              </div>
+              <div class="docs-body" id="docs-body-prompt">
+                <div class="upload-zone" id="upload-zone-prompt"
+                  onclick="document.getElementById('file-input-prompt').click()"
+                  ondragover="handleDragOver(event,'prompt')"
+                  ondragleave="handleDragLeave('prompt')"
+                  ondrop="handleDrop(event,'prompt')">
+                  <input type="file" id="file-input-prompt"
+                    accept=".pdf,.docx,.pptx,.txt,.md,.html,.csv"
+                    onchange="uploadFile('prompt', this)">
+                  <span class="upload-label">⬆ Upload Document</span>
+                  <span class="upload-hint">PDF, DOCX, TXT, MD, CSV</span>
+                </div>
+                <div class="upload-progress" id="upload-progress-prompt"></div>
+                <div class="doc-list" id="doc-list-prompt">
+                  <div class="docs-empty">No documents yet</div>
+                </div>
+              </div>
+            </div>
+          </div>
+
         </div>
       </div>
 
@@ -1239,6 +1551,75 @@
         </div>
       </div>
 
+    </div>
+  </div>
+
+  <!-- ======= INGESTION STATUS PANEL ======= -->
+  <div class="panel" id="panel-ingestion">
+    <div style="display:flex;flex:1;overflow:hidden;gap:0;">
+
+      <!-- LEFT: folder scan -->
+      <div style="width:380px;flex-shrink:0;border-right:1px solid var(--border);padding:24px;display:flex;flex-direction:column;gap:18px;overflow-y:auto;">
+        <div class="section-title">// Scan Folder</div>
+
+        <div class="form-group">
+          <div class="form-label">Folder Path</div>
+          <input type="text" class="form-input" id="ing-folder"
+            placeholder="/home/hpc25/Downloads/LVG">
+        </div>
+
+        <button class="generate-btn" id="ing-btn" onclick="scanIngestion()">
+          🔍 Check Ingestion Status
+        </button>
+
+        <!-- Summary cards -->
+        <div id="ing-summary" style="display:none;display:flex;flex-direction:column;gap:10px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+            <div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-family:var(--mono);font-size:20px;color:var(--text);" id="ing-total">0</div>
+              <div style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;margin-top:4px;">Total Files</div>
+            </div>
+            <div style="background:var(--bg3);border:1px solid var(--success);border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-family:var(--mono);font-size:20px;color:var(--success);" id="ing-done">0</div>
+              <div style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;margin-top:4px;">Ingested</div>
+            </div>
+            <div style="background:var(--bg3);border:1px solid var(--warning);border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-family:var(--mono);font-size:20px;color:var(--warning);" id="ing-pending">0</div>
+              <div style="font-family:var(--mono);font-size:9px;color:var(--text3);text-transform:uppercase;margin-top:4px;">Pending</div>
+            </div>
+          </div>
+
+          <button class="generate-btn" id="ing-ingest-btn"
+            style="background:linear-gradient(135deg,var(--success),#16a34a);display:none;"
+            onclick="ingestPending()">
+            ⚡ Ingest All Pending Files
+          </button>
+          <div id="ing-ingest-progress" style="display:none;">
+            <div class="loading-bar"></div>
+            <div style="font-family:var(--mono);font-size:11px;color:var(--text3);margin-top:6px;text-align:center;" id="ing-ingest-msg">Ingesting...</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RIGHT: file lists -->
+      <div style="flex:1;display:flex;flex-direction:column;overflow:hidden;">
+
+        <!-- Inner tab bar -->
+        <div style="display:flex;gap:6px;padding:16px 24px 0;border-bottom:1px solid var(--border);padding-bottom:12px;flex-shrink:0;">
+          <button class="qp-view-tab active" id="ingtab-pending" onclick="switchIngView('pending')">⏳ Pending <span id="ing-pending-label"></span></button>
+          <button class="qp-view-tab answers-tab" id="ingtab-ingested" onclick="switchIngView('ingested')">✅ Ingested <span id="ing-ingested-label"></span></button>
+        </div>
+
+        <!-- Pending list -->
+        <div id="ingview-pending" style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:6px;">
+          <div class="output-placeholder" style="padding:40px 0;text-align:center;">Enter a folder path and click Check to see file status.</div>
+        </div>
+
+        <!-- Ingested list -->
+        <div id="ingview-ingested" style="flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:6px;display:none;">
+        </div>
+
+      </div>
     </div>
   </div>
 
@@ -1276,7 +1657,7 @@
   // ===================== TABS =====================
   function switchTab(tab) {
     document.querySelectorAll('.tab').forEach((t, i) => {
-      const tabs = ['chat', 'qpaper', 'prompt'];
+      const tabs = ['chat', 'qpaper', 'prompt', 'ingestion'];
       t.classList.toggle('active', tabs[i] === tab);
     });
     document.querySelectorAll('.panel').forEach(p => p.classList.remove('active'));
@@ -1436,6 +1817,7 @@
     btn.disabled = true;
     btn.textContent = '⏳ Generating...';
     output.innerHTML = '<div class="loading-bar"></div>';
+    switchQPView('questions');
 
     try {
     const res = await fetch(`${API}/generate-paper`, {
@@ -1472,6 +1854,30 @@
     output.innerHTML = formatPaper(data.paper, topic, difficulty);
     document.getElementById('qp-answers').innerHTML = formatAnswerKey(data.paper);
 
+    // Show sources in the Sources tab
+    const srcBox = document.getElementById('qp-sources');
+    if (data.sources && data.sources.length) {
+      srcBox.innerHTML = `
+        <div style="font-family:var(--mono);font-size:11px;color:var(--text3);text-transform:uppercase;letter-spacing:0.08em;margin-bottom:10px;">
+          Documents used — ${data.sources.length} file${data.sources.length > 1 ? 's' : ''}
+        </div>
+        ${data.sources.map(s => `
+          <div class="source-item" style="margin-bottom:8px;">
+            <div class="source-file">📄 ${escapeHtml(s.filename)}</div>
+            <div style="font-size:11px;color:var(--text3);margin-top:3px;word-break:break-all;">${escapeHtml(s.source)}</div>
+          </div>
+        `).join('')}
+      `;
+      // Update Sources tab label with count
+      document.getElementById('qptab-sources').textContent = `📁 Sources (${data.sources.length})`;
+    } else {
+      srcBox.innerHTML = '<div class="output-placeholder">No source information available.</div>';
+      document.getElementById('qptab-sources').textContent = '📁 Sources';
+    }
+
+    // Auto-switch to Questions tab after generation
+    switchQPView('questions');
+
     showToast('Question paper generated!', 'success');
 
 } catch (err) {
@@ -1483,6 +1889,14 @@
 btn.disabled = false;
 btn.textContent = '⚡ Generate Question Paper';
   }
+  // ===================== QP TAB SWITCHER =====================
+  function switchQPView(view) {
+    ['questions', 'answers', 'sources'].forEach(v => {
+      document.getElementById(`qptab-${v}`)?.classList.toggle('active', v === view);
+      document.getElementById(`qpview-${v}`)?.classList.toggle('active', v === view);
+    });
+  }
+
   // ===================== CUSTOM PROMPT =====================
   const templates = {
     summarize: `Provide a comprehensive summary of the main topics covered in the documents. Include:
@@ -1635,11 +2049,28 @@ Format as:
       const data = await res.json();
       if (!res.ok) throw new Error(data.detail || 'Request failed');
 
-      let output = data.answer || 'No response';
-      if (data.latency_ms) output += `\n\n— Response time: ${data.latency_ms}ms`;
-      if (data.verdict) output += ` | Verdict: ${data.verdict}`;
+      const meta = [
+        data.latency_ms ? `⏱ ${data.latency_ms}ms` : '',
+        data.verdict ? `Verdict: ${data.verdict}` : ''
+      ].filter(Boolean).join(' | ');
 
-      result.textContent = output;
+      const sourcesHtml = (data.sources || []).length ? `
+        <div class="sources" style="margin-top:14px;">
+          <div class="sources-label">Sources</div>
+          ${(data.sources || []).map((s, i) => `
+            <div class="source-item">
+              <div class="source-file">📄 ${escapeHtml(s.source?.split('/').pop() || 'Document')} — Score: ${(s.reranker_score || 0).toFixed(3)}</div>
+              ${escapeHtml((s.text || '').substring(0, 180))}...
+            </div>
+          `).join('')}
+        </div>
+      ` : '';
+
+      result.innerHTML = `
+        <div style="white-space:pre-wrap;line-height:1.7;">${escapeHtml(data.answer || 'No response')}</div>
+        ${meta ? `<div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:10px;">${escapeHtml(meta)}</div>` : ''}
+        ${sourcesHtml}
+      `;
       showToast('Prompt completed', 'success');
 
     } catch (err) {
@@ -1732,7 +2163,10 @@ Format as:
     if (paper.mcq?.length) {
       html += `<p style="font-family:var(--mono);font-size:12px;color:var(--success);margin:10px 0 6px;letter-spacing:0.05em;">SECTION A — MCQ ANSWERS</p>`;
       paper.mcq.forEach((q) => {
-        html += `<p style="margin:6px 0;font-size:13px;"><b>Q${qno++}.</b> <span style="color:var(--success);">${escapeHtml(String(q.answer || '—'))}</span></p>`;
+        const letter = String(q.answer || '—');
+        const text = (q.options || {})[letter] || '';
+        const display = text ? `${letter}) ${text}` : letter;
+        html += `<p style="margin:6px 0;font-size:13px;"><b>Q${qno++}.</b> <span style="color:var(--success);">${escapeHtml(display)}</span></p>`;
       });
     }
 
@@ -1794,6 +2228,235 @@ async function downloadFile(endpoint, filename, mime, label) {
     console.error(err);
   }
 }
+
+function downloadOutput(id, filename) {
+  const text = document.getElementById(id).textContent;
+  const blob = new Blob([text], { type: 'text/plain' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url; a.download = filename; a.click();
+  URL.revokeObjectURL(url);
+}
+
+// ===================== INGESTION STATUS =====================
+let _ingestionData = null;
+
+async function scanIngestion() {
+  const folder = document.getElementById('ing-folder').value.trim();
+  if (!folder) { showToast('Enter a folder path', 'error'); return; }
+
+  const btn = document.getElementById('ing-btn');
+  btn.disabled = true;
+  btn.textContent = '⏳ Scanning...';
+
+  try {
+    const res = await fetch(`${API}/ingestion-status?folder_path=${encodeURIComponent(folder)}`);
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Scan failed');
+
+    _ingestionData = data;
+
+    document.getElementById('ing-total').textContent   = data.total;
+    document.getElementById('ing-done').textContent    = data.ingested_count;
+    document.getElementById('ing-pending').textContent = data.pending_count;
+    document.getElementById('ing-summary').style.display = 'flex';
+
+    const ingestBtn = document.getElementById('ing-ingest-btn');
+    ingestBtn.style.display = data.pending_count > 0 ? 'block' : 'none';
+
+    document.getElementById('ing-pending-label').textContent =
+      data.pending_count ? `(${data.pending_count})` : '';
+    document.getElementById('ing-ingested-label').textContent =
+      data.ingested_count ? `(${data.ingested_count})` : '';
+
+    renderIngestionList('pending',  data.pending);
+    renderIngestionList('ingested', data.ingested);
+
+    switchIngView(data.pending_count > 0 ? 'pending' : 'ingested');
+    showToast(`Scan complete — ${data.pending_count} file(s) pending`,
+      data.pending_count ? 'error' : 'success');
+
+  } catch (err) {
+    showToast(`Scan failed: ${err.message}`, 'error');
+  }
+
+  btn.disabled = false;
+  btn.textContent = '🔍 Check Ingestion Status';
+}
+
+function renderIngestionList(type, files) {
+  const el = document.getElementById(`ingview-${type}`);
+  if (!files || !files.length) {
+    el.innerHTML = `<div class="output-placeholder" style="padding:30px 0;text-align:center;">
+      ${type === 'pending' ? '✅ All files are ingested!' : 'No ingested files found.'}
+    </div>`;
+    return;
+  }
+  el.innerHTML = files.map(f => {
+    const name = f.split('/').pop();
+    const dir  = f.substring(0, f.lastIndexOf('/'));
+    const color = type === 'pending' ? 'var(--warning)' : 'var(--success)';
+    const icon  = type === 'pending' ? '⏳' : '✅';
+    return `
+      <div style="display:flex;align-items:flex-start;gap:10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;">
+        <span style="font-size:14px;flex-shrink:0;margin-top:1px;">${icon}</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-family:var(--mono);font-size:12px;color:${color};overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(name)}</div>
+          <div style="font-family:var(--mono);font-size:10px;color:var(--text3);margin-top:2px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(dir)}</div>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function switchIngView(view) {
+  ['pending', 'ingested'].forEach(v => {
+    document.getElementById(`ingtab-${v}`)?.classList.toggle('active', v === view);
+    const el = document.getElementById(`ingview-${v}`);
+    if (el) el.style.display = v === view ? 'flex' : 'none';
+  });
+}
+
+async function ingestPending() {
+  const folder = document.getElementById('ing-folder').value.trim();
+  if (!folder) return;
+
+  document.getElementById('ing-ingest-btn').style.display = 'none';
+  const prog = document.getElementById('ing-ingest-progress');
+  const msg  = document.getElementById('ing-ingest-msg');
+  prog.style.display = 'block';
+  msg.textContent = 'Starting ingestion — this may take a while...';
+
+  try {
+    const res = await fetch(`${API}/ingest/folder`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ folder_path: folder, use_vlm: false })
+    });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Ingestion failed');
+
+    msg.textContent = `Done — ${data.chunks} chunks added`;
+    showToast(`Ingestion complete: ${data.chunks} chunks`, 'success');
+    setTimeout(() => scanIngestion(), 800);
+  } catch (err) {
+    msg.textContent = `Failed: ${err.message}`;
+    showToast(`Ingestion failed: ${err.message}`, 'error');
+    document.getElementById('ing-ingest-btn').style.display = 'block';
+  }
+
+  setTimeout(() => { prog.style.display = 'none'; }, 4000);
+}
+
+// ===================== DOCUMENT UPLOAD =====================
+async function uploadFile(section, inputEl) {
+  const file = inputEl.files[0];
+  if (!file) return;
+
+  const progressEl = document.getElementById(`upload-progress-${section}`);
+  progressEl.style.display = 'block';
+  showToast(`Uploading ${file.name}...`, '');
+
+  try {
+    const formData = new FormData();
+    formData.append('file', file);
+    formData.append('section', section);
+
+    const res = await fetch(`${API}/upload`, { method: 'POST', body: formData });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.detail || 'Upload failed');
+
+    showToast(`✅ ${file.name}: ${data.chunks} chunks ingested`, 'success');
+    loadDocuments(section);
+  } catch (err) {
+    showToast(`Upload failed: ${err.message}`, 'error');
+  }
+
+  progressEl.style.display = 'none';
+  inputEl.value = '';
+}
+
+async function loadDocuments(section) {
+  try {
+    const res = await fetch(`${API}/documents?section=${section}`);
+    const data = await res.json();
+    renderDocList(section, data.documents || []);
+  } catch {}
+}
+
+function renderDocList(section, docs) {
+  const listEl = document.getElementById(`doc-list-${section}`);
+  const countEl = document.getElementById(`docs-count-${section}`);
+  if (!listEl || !countEl) return;
+
+  countEl.textContent = docs.length;
+
+  if (!docs.length) {
+    listEl.innerHTML = '<div class="docs-empty">No documents yet</div>';
+    return;
+  }
+
+  listEl.innerHTML = docs.map(d => `
+    <div class="doc-item">
+      <span class="doc-name" title="${escapeHtml(d.source)}">📄 ${escapeHtml(d.filename)}</span>
+      <span class="doc-chunks">${d.chunk_count}c</span>
+      <button class="doc-del" onclick="deleteDoc('${escapeHtml(d.source).replace(/'/g,"\\'")}','${section}')" title="Remove from knowledge base">✕</button>
+    </div>
+  `).join('');
+}
+
+async function deleteDoc(source, section) {
+  if (!confirm(`Remove "${source.split('/').pop()}" from knowledge base?`)) return;
+  try {
+    const res = await fetch(`${API}/documents?source=${encodeURIComponent(source)}`, { method: 'DELETE' });
+    if (!res.ok) throw new Error('Delete failed');
+    showToast('Document removed', '');
+    loadDocuments(section);
+  } catch (err) {
+    showToast(`Delete failed: ${err.message}`, 'error');
+  }
+}
+
+function toggleDocs(section) {
+  const body = document.getElementById(`docs-body-${section}`);
+  const arrow = document.getElementById(`docs-toggle-${section}`);
+  const isOpen = body.classList.contains('open');
+  body.classList.toggle('open', !isOpen);
+  if (arrow) arrow.style.transform = isOpen ? '' : 'rotate(180deg)';
+  if (!isOpen) loadDocuments(section);
+}
+
+function handleDragOver(e, section) {
+  e.preventDefault();
+  document.getElementById(`upload-zone-${section}`)?.classList.add('dragover');
+}
+
+function handleDragLeave(section) {
+  document.getElementById(`upload-zone-${section}`)?.classList.remove('dragover');
+}
+
+function handleDrop(e, section) {
+  e.preventDefault();
+  document.getElementById(`upload-zone-${section}`)?.classList.remove('dragover');
+  const input = document.getElementById(`file-input-${section}`);
+  if (e.dataTransfer.files.length) {
+    const dt = new DataTransfer();
+    dt.items.add(e.dataTransfer.files[0]);
+    input.files = dt.files;
+    uploadFile(section, input);
+  }
+}
+
+// Load document counts on page load
+['chat', 'paper', 'prompt'].forEach(s => {
+  fetch(`${API}/documents?section=${s}`)
+    .then(r => r.json())
+    .then(d => {
+      const el = document.getElementById(`docs-count-${s}`);
+      if (el) el.textContent = (d.documents || []).length;
+    })
+    .catch(() => {});
+});
 </script>
 
 </body>

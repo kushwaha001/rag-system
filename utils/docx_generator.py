@@ -52,8 +52,8 @@ def generate_docx(paper_data: dict, topic: str, difficulty: str) -> str:
             r = p.add_run(f"Q{qno}. ")
             r.bold = True
             p.add_run(q.get("question", ""))
-            for opt in q.get("options", []):
-                doc.add_paragraph(f"        {opt}")
+            for key, opt in (q.get("options") or {}).items():
+                doc.add_paragraph(f"        {key}) {opt}")
             doc.add_paragraph("")
             qno += 1
 
@@ -101,7 +101,10 @@ def generate_docx(paper_data: dict, topic: str, difficulty: str) -> str:
         for q in paper_data["mcq"]:
             p = doc.add_paragraph()
             p.add_run(f"Q{qno}. ").bold = True
-            p.add_run(str(q.get("answer", "—")))
+            ans_letter = str(q.get("answer", "—"))
+            ans_text = (q.get("options") or {}).get(ans_letter, "")
+            ans_display = f"{ans_letter}) {ans_text}" if ans_text else ans_letter
+            p.add_run(ans_display)
             qno += 1
         doc.add_paragraph("")
 

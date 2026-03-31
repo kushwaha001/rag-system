@@ -24,7 +24,7 @@ SUPPORTED_EXTENSIONS = {'.pdf', '.docx', '.pptx', '.md', '.txt', '.html', '.csv'
 # =========================
 # CHUNKING
 # =========================
-def chunk_text(text: str, chunk_size: int = 512, overlap: int = 50):
+def chunk_text(text: str, chunk_size: int = 256, overlap: int = 64):
     words = text.split()
     chunks = []
     i = 0
@@ -154,7 +154,7 @@ def parse_document(file_path: str):
 # =========================
 # INGEST SINGLE DOCUMENT
 # =========================
-def ingest_document(file_path: str):
+def ingest_document(file_path: str, section: str = "all"):
     logger.info(f"📄 Parsing: {os.path.basename(file_path)}")
 
     try:
@@ -207,7 +207,8 @@ def ingest_document(file_path: str):
                     "filename": os.path.basename(file_path),
                     "chunk_index": i,
                     "chunk_type": chunk_type,
-                    "file_type": os.path.splitext(file_path)[1].lower()
+                    "file_type": os.path.splitext(file_path)[1].lower(),
+                    "section": section
                 }
             ))
 
