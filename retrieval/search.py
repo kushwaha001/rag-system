@@ -59,16 +59,55 @@ def retrieve(query: str, top_k: int = 5) -> List[Dict]:
     print(f"✅ Dense retrieval: {len(dense_results)} results")
 
     fused_results = reciprocal_rank_fusion([dense_results])
-    print(f"✅ RRF fusion: {len(fused_results)} results")
 
-    # 🔥 RERANKER DISABLED
     for r in fused_results:
         r["reranker_score"] = r.get("rrf_score", 0.0)
 
-    reranked = fused_results[:top_k]
-    print(f"✅ Using top-{top_k} without reranker")
+    return fused_results[:top_k]
 
-    return reranked
+
+def retrieve_multi(queries: List[str], top_k: int = 20) -> List[Dict]:
+    """Retrieve for multiple queries with a single batched embedding call."""
+    from utils.embeddings import get_embedding_service
+    embedding_service = get_embedding_service()
+
+    # Embed all queries in one GPU batch
+    vectors = embedding_service.model.encode_queries(queries)
+    import numpy as np
+    if isinstance(vectors, np.ndarray):
+        vectors = vectors.tolist()
+
+    client = get_qdrant_client()
+    seen_texts: set = set()
+    all_chunks: List[Dict] = []
+
+    for vector in vectors:
+        if isinstance(vector, np.ndarray):
+            vector = vector.tolist()
+        vector = [float(x) for x in vector]
+
+        results = client.query_points(
+            collection_name=COLLECTION_NAME,
+            query=vector,
+            limit=top_k,
+            with_payload=True
+        ).points
+
+        for r in results:
+            text = r.payload["text"].strip()
+            if text and text not in seen_texts:
+                seen_texts.add(text)
+                all_chunks.append({
+                    "text": text,
+                    "source": r.payload["source"],
+                    "chunk_index": r.payload["chunk_index"],
+                    "score": r.score,
+                    "rrf_score": r.score,
+                    "reranker_score": r.score,
+                    "retriever": "dense"
+                })
+
+    return all_chunks
 
 if __name__ == "__main__":
     results = retrieve("What is machine learning?", top_k=3)

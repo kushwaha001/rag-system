@@ -1,0 +1,16 @@
+.venv/
+frontend/node_modules/
+qdrant_data/
+qdrant_storage/
+__pycache__/
+*.pyc
+*.pyo
+.env
+.git/
+*.pdf
+*.docx
+*.safetensors
+*.bin
+*.gguf
+models/
+logs/

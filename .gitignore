@@ -21,6 +21,7 @@ data/
 
 # Storage
 qdrant_storage/
+qdrant_data/
 
 # Logs
 logs/

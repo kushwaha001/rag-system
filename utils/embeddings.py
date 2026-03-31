@@ -1,19 +1,26 @@
 from FlagEmbedding import FlagModel
 from typing import List
 import numpy as np
+import torch
 
 class EmbeddingService:
     def __init__(self):
-        print("🔁 Loading BGE model on CPU...")
+        if torch.cuda.is_available() and torch.cuda.device_count() > 1:
+            device = "cuda:1"
+        elif torch.cuda.is_available():
+            device = "cuda:0"
+        else:
+            device = "cpu"
+        print(f"🔁 Loading BGE model on {device}...")
 
         self.model = FlagModel(
             'BAAI/bge-large-en-v1.5',
             query_instruction_for_retrieval="Represent this sentence for searching relevant passages:",
-            use_fp16=False,
-            devices=["cpu"]   # CPU = stable (no CUDA issues)
+            use_fp16=torch.cuda.is_available(),
+            devices=[device]
         )
 
-        print("✅ BGE-Large loaded on CPU")
+        print(f"✅ BGE-Large loaded on {device}")
 
     # =========================
     # DOCUMENT EMBEDDINGS

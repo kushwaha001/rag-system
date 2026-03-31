@@ -5,6 +5,8 @@ from utils.qdrant_setup import create_collection
 import httpx
 import os
 import time
+import asyncio
+import json
 from fastapi.responses import FileResponse
 from utils.docx_generator import generate_docx
 from utils.pdf_generator import generate_pdf
@@ -135,17 +137,6 @@ async def query(req: QueryRequest):
     try:
         start_time = time.time()
 
-        from utils.embeddings import get_embedding_service
-
-        # =========================
-        # STEP 0 — EMBEDDING
-        # =========================
-        embedding_service = get_embedding_service()
-        query_embedding = embedding_service.embed_query(req.question)
-
-        # 🔥 CACHE COMPLETELY DISABLED
-        # (removed all cache usage)
-
         # =========================
         # STEP 1 — RETRIEVE
         # =========================
@@ -206,6 +197,8 @@ Answer:"""
                 }
             )
             result = response.json()
+            if "error" in result:
+                raise HTTPException(status_code=500, detail=f"vLLM error: {result['error'].get('message', str(result['error']))}")
             answer = result["choices"][0]["message"]["content"]
 
         # =========================
@@ -256,30 +249,28 @@ Answer:"""
 @app.post("/generate-paper")
 async def generate_paper(req: PaperRequest):
     try:
+        import random
         start_time = time.time()
 
-        from retrieval.search import retrieve
+        from retrieval.search import retrieve_multi
 
         # =========================
-        # STEP 1 — RETRIEVE CONTEXT
+        # STEP 1 — RETRIEVE CONTEXT (multiple angles, single batched embedding)
         # =========================
-        query_text = f"{req.topic} concepts explanation technical details"
-        raw_chunks = retrieve(query_text, top_k=50)
+        queries = [
+            f"{req.topic} concepts definitions principles",
+            f"{req.topic} mechanisms processes how it works",
+            f"{req.topic} applications examples real world",
+            f"{req.topic} analysis comparison advantages disadvantages",
+        ]
 
-        if not raw_chunks:
+        all_chunks = retrieve_multi(queries, top_k=20)
+
+        if not all_chunks:
             raise HTTPException(status_code=404, detail="No relevant content found")
 
-        # Deduplicate
-        seen = set()
-        chunks = []
-        for c in raw_chunks:
-            text = c.get("text", "").strip()
-            if text and text not in seen:
-                seen.add(text)
-                chunks.append(c)
-
-        # Bigger context
-        context = "\n\n".join([c["text"] for c in chunks[:60]])
+        # Shuffle so each generation run uses chunks in a different order
+        random.shuffle(all_chunks)
 
         # =========================
         # STEP 2 — DISTRIBUTION
@@ -316,92 +307,116 @@ async def generate_paper(req: PaperRequest):
                 long += unallocated
 
         # =========================
-        # STEP 3 — BATCH GENERATION
+        # STEP 3 — PARALLEL GENERATION (one request per question)
+        # vLLM continuous batching handles all requests simultaneously
         # =========================
-        import json
+        focus_angles = [
+            "definitions, terminology, and core concepts",
+            "working mechanisms, processes, and how things operate",
+            "real-world applications, use cases, and examples",
+            "comparisons, trade-offs, advantages and disadvantages",
+            "problem-solving, troubleshooting, and critical thinking",
+        ]
 
-        batch_size = 25
-        all_mcq, all_short, all_long = [], [], []
+        answer_letters = ["a", "b", "c", "d"]
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        def build_prompt(q_type: str, index: int) -> str:
+            chunk_start = (index * 3) % len(all_chunks)
+            ctx_chunks = all_chunks[chunk_start:chunk_start + 3]
+            if len(ctx_chunks) < 3:
+                ctx_chunks += all_chunks[:3 - len(ctx_chunks)]
+            context = "\n\n".join([c["text"][:500] for c in ctx_chunks])
+            focus = focus_angles[index % len(focus_angles)]
+            correct = random.choice(answer_letters)
 
-            for start in range(0, total, batch_size):
-                current_batch = min(batch_size, total - start)
-
-                print(f"🚀 Generating batch {start//batch_size + 1}")
-
-                b_mcq = int(current_batch * 0.5) if "mcq" in normalized_types else 0
-                b_short = int(current_batch * 0.3) if "short" in normalized_types else 0
-                b_long = (current_batch - b_mcq - b_short) if "long" in normalized_types else 0
-                b_unallocated = current_batch - b_mcq - b_short - b_long
-                if b_unallocated > 0:
-                    if "mcq" in normalized_types:
-                        b_mcq += b_unallocated
-                    elif "short" in normalized_types:
-                        b_short += b_unallocated
-                    else:
-                        b_long += b_unallocated
-
-                batch_prompt = f"""
-You are an expert exam paper setter.
-
-Generate EXACTLY {current_batch} questions.
-
-Breakdown:
-- MCQs: {b_mcq}
-- Short Answer: {b_short}
-- Long Answer: {b_long}
+            if q_type == "mcq":
+                return f"""You are an exam setter. Read the context carefully and generate 1 MCQ question.
 
 STRICT RULES:
-- Use ONLY the given context
-- No repetition
-- Return ONLY valid JSON
+- The question MUST be based ONLY on information present in the context below
+- Do NOT use any outside knowledge
+- The correct answer MUST be option "{correct}"
+- The other 3 options must be plausible but clearly wrong based on the context
+- Focus on: {focus}
+- Difficulty: {req.difficulty}
 
-FORMAT:
-{{
-  "mcq": [...],
-  "short": [...],
-  "long": [...]
-}}
+Return ONLY valid JSON, no extra text:
+{{"question": "<question from context>", "options": {{"a": "<option>", "b": "<option>", "c": "<option>", "d": "<option>"}}, "answer": "{correct}"}}
 
 Context:
-{context}
-"""
+{context}"""
 
-                response = await client.post(
+            elif q_type == "short":
+                return f"""You are an exam setter. Read the context carefully and generate 1 short answer question.
+
+STRICT RULES:
+- The question and answer MUST be based ONLY on information in the context below
+- Do NOT use any outside knowledge
+- Focus on: {focus}
+- Difficulty: {req.difficulty}
+
+Return ONLY valid JSON, no extra text:
+{{"question": "<question from context>", "answer": "<concise answer from context>"}}
+
+Context:
+{context}"""
+
+            else:
+                return f"""You are an exam setter. Read the context carefully and generate 1 long answer question.
+
+STRICT RULES:
+- The question and answer MUST be based ONLY on information in the context below
+- Do NOT use any outside knowledge
+- Focus on: {focus}
+- Difficulty: {req.difficulty}
+
+Return ONLY valid JSON, no extra text:
+{{"question": "<question from context>", "answer": "<detailed answer from context>"}}
+
+Context:
+{context}"""
+
+        async def generate_one(client: httpx.AsyncClient, q_type: str, index: int):
+            prompt = build_prompt(q_type, index)
+            try:
+                resp = await client.post(
                     f"{VLLM_HOST}/v1/chat/completions",
                     json={
                         "model": VLLM_MODEL,
-                        "messages": [{"role": "user", "content": batch_prompt}],
-                        "temperature": 0.3,
-                        "max_tokens": 4096
+                        "messages": [{"role": "user", "content": prompt}],
+                        "temperature": 0.7,
+                        "top_p": 0.9,
+                        "max_tokens": 512
                     }
                 )
+                result = resp.json()
+                if "error" in result:
+                    return None, q_type
+                text = result["choices"][0]["message"]["content"].strip()
+                start = text.find("{")
+                end = text.rfind("}") + 1
+                if start == -1 or end == 0:
+                    return None, q_type
+                return json.loads(text[start:end]), q_type
+            except Exception:
+                return None, q_type
 
-                result = response.json()
-                output_text = result["choices"][0]["message"]["content"]
+        # Build task list: mcq × mcq_count, short × short_count, long × long_count
+        tasks_spec = (
+            [("mcq", i) for i in range(mcq)] +
+            [("short", i) for i in range(short)] +
+            [("long", i) for i in range(long)]
+        )
 
-                import re
+        async with httpx.AsyncClient(timeout=120) as client:
+            results = await asyncio.gather(*[
+                generate_one(client, q_type, idx)
+                for idx, (q_type, i) in enumerate(tasks_spec)
+            ])
 
-                def extract_json(text):
-                    match = re.search(r"\{.*\}", text, re.DOTALL)
-                    return match.group(0) if match else None
-
-                clean = extract_json(output_text)
-
-                if not clean:
-                    print("❌ NO JSON FOUND:\n", output_text[:300])
-                    continue
-
-                try:
-                    batch_paper = json.loads(clean)
-                except Exception as e:
-                    print("❌ JSON ERROR:", e)
-                    print("❌ RAW OUTPUT:\n", output_text[:300])
-                    continue
-                all_mcq.extend(batch_paper.get("mcq", []))
-                all_short.extend(batch_paper.get("short", []))
-                all_long.extend(batch_paper.get("long", []))
+        all_mcq = [r for r, t in results if r and t == "mcq"]
+        all_short = [r for r, t in results if r and t == "short"]
+        all_long = [r for r, t in results if r and t == "long"]
 
         # =========================
         # STEP 4 — MERGE RESULTS

@@ -234,6 +234,9 @@ def ingest_folder(folder_path: str, use_vlm: bool = False) -> dict:
     all_files = []
     for root, _, files in os.walk(folder_path):
         for f in files:
+            # Skip Office temp/lock files (start with ~$)
+            if f.startswith('~$'):
+                continue
             if os.path.splitext(f)[1].lower() in SUPPORTED_EXTENSIONS:
                 all_files.append(os.path.join(root, f))
 

@@ -1449,6 +1449,11 @@
         })
     });
 
+    const contentType = res.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+        throw new Error('Request timed out. Try fewer questions or a simpler topic.');
+    }
+
     const data = await res.json();
 
     if (!res.ok) throw new Error(data.detail || 'Generation failed');
@@ -1691,8 +1696,8 @@ Format as:
       html += `<p style="font-family:var(--mono);font-size:12px;color:var(--accent);margin:14px 0 8px;letter-spacing:0.05em;">SECTION A — MULTIPLE CHOICE QUESTIONS</p>`;
       paper.mcq.forEach((q) => {
         html += `<p style="margin:10px 0 4px;"><b>Q${qno++}.</b> ${escapeHtml(q.question || '')}</p>`;
-        (q.options || []).forEach(opt => {
-          html += `<div style="margin-left:22px;color:var(--text2);font-size:13px;padding:2px 0;">• ${escapeHtml(opt)}</div>`;
+        Object.entries(q.options || {}).forEach(([key, opt]) => {
+          html += `<div style="margin-left:22px;color:var(--text2);font-size:13px;padding:2px 0;"><b>${key})</b> ${escapeHtml(opt)}</div>`;
         });
       });
     }
