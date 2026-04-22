@@ -25,9 +25,13 @@ class RerankerService:
         # Score each pair
         scores = self.reranker.compute_score(pairs, normalize=True)
 
-        # Attach reranker scores
+        # Attach reranker scores — handle both list and single numpy scalar returns
+        import numpy as np
+        if not isinstance(scores, (list, np.ndarray)):
+            scores = [scores]
+        scores = list(scores)
         for i, chunk in enumerate(chunks):
-            chunk["reranker_score"] = float(scores[i]) if isinstance(scores, list) else float(scores)
+            chunk["reranker_score"] = float(scores[i])
 
         # Sort by reranker score
         reranked = sorted(chunks, key=lambda x: x["reranker_score"], reverse=True)

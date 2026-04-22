@@ -15,6 +15,12 @@ STOPWORDS = {
     'from', 'was', 'were', 'has', 'have', 'had', 'be', 'been', 'being'
 }
 
+# Tokens that appear in almost every folder/filename and must NOT be the
+# sole discriminator when selecting which system folder to target.
+# e.g. "Fuel System" → "system"/"sys" match LUB SYS, BRAKE SYS, etc.
+# Only SPECIFIC content words ("fuel", "lubrication", "brake"...) should pick the folder.
+GENERIC_FOLDER_TOKENS = {'system', 'sys', 'manual', 'wm', 'workshop'}
+
 # Abbreviation map: expands folder abbreviations so "LUB" matches "lubrication"
 ABBREV = {
     'sys': ['system'],
@@ -107,32 +113,46 @@ def parse_path_levels(source: str) -> Tuple[str, str, str]:
     return vehicle_folder, system_folder, filename
 
 
-def score_source(source: str, query_tok: Set[str]) -> Tuple[int, int]:
+def score_source(source: str, query_tok: Set[str]) -> Tuple[int, int, int]:
     """
-    Returns (vehicle_score, system_score) for a source path vs query tokens.
+    Returns (vehicle_score, system_score, sys_folder_specific) for a source path.
 
-    vehicle_score = overlap between query tokens and the vehicle-folder tokens
-    system_score  = overlap between query tokens and system-folder + filename tokens
+    vehicle_score      = overlap between query tokens and the vehicle-folder tokens
+    system_score       = overlap between query tokens and (system-folder + filename) tokens
+    sys_folder_specific = overlap between (query − generic − vehicle) tokens and the
+                          system-folder tokens ONLY (filename excluded)
 
-    Abbreviation expansion is applied to path tokens so e.g. "SUSP SYS" expands
-    to include "suspension" and "system", matching queries that use those words.
+    Why sys_folder_specific matters: the same filename often appears in every
+    system subfolder (e.g. `Field manual of MG 413 MPFI.pdf` is copied into
+    FUEL SYS, LUB SYS, BRAKE SYS, etc.), so filename tokens inflate system_score
+    equally across folders. sys_folder_specific ignores the filename and strips
+    generic "system/sys/manual/workshop" tokens plus the vehicle tokens, leaving
+    only the *content-specific* words ("fuel", "lubrication", "brake") that
+    actually discriminate one system folder from another.
     """
     vehicle_folder, system_folder, filename = parse_path_levels(source)
 
-    v_tok = path_tokens(vehicle_folder)
-    s_tok = path_tokens(system_folder + " " + filename)
+    v_tok      = path_tokens(vehicle_folder)
+    sys_tok    = path_tokens(system_folder)
+    s_tok      = sys_tok | path_tokens(filename)
 
     v_score = len(query_tok & v_tok)
     s_score = len(query_tok & s_tok)
 
-    return v_score, s_score
+    # Specific score: drop generic folder words and the vehicle tokens from the
+    # query, then intersect with the system-folder tokens only.
+    specific_query = query_tok - GENERIC_FOLDER_TOKENS - v_tok
+    specific_sys   = sys_tok   - GENERIC_FOLDER_TOKENS
+    sys_specific = len(specific_query & specific_sys)
+
+    return v_score, s_score, sys_specific
 
 
 # ─────────────────────────────────────────────────────────────
 # SOURCE-TARGETED SEARCH
 # ─────────────────────────────────────────────────────────────
 
-def source_targeted_search(query: str, top_k_per_source: int = 10) -> List[Dict]:
+def source_targeted_search(query: str, top_k_per_source: int = 10, section_filter: str = None) -> List[Dict]:
     """
     Directly inject chunks from files whose paths best match the query,
     using two-level (vehicle + system) scoring with abbreviation expansion.
@@ -157,12 +177,17 @@ def source_targeted_search(query: str, top_k_per_source: int = 10) -> List[Dict]
     # ── collect all unique source paths ──────────────────────
     all_sources: Set[str] = set()
     offset = None
+    src_scroll_filter = None
+    if section_filter:
+        src_scroll_filter = Filter(must=[FieldCondition(key="section", match=MatchValue(value=section_filter))])
+
     while True:
         results, offset = client.scroll(
             collection_name=COLLECTION_NAME,
             limit=1000,
             offset=offset,
-            with_payload=["source"]
+            with_payload=["source"],
+            scroll_filter=src_scroll_filter
         )
         for r in results:
             if r.payload and "source" in r.payload:
@@ -171,11 +196,11 @@ def source_targeted_search(query: str, top_k_per_source: int = 10) -> List[Dict]
             break
 
     # ── score every source ────────────────────────────────────
-    scored: List[Tuple[str, int, int]] = []   # (source, v_score, s_score)
+    scored: List[Tuple[str, int, int, int]] = []   # (source, v, s, sp)
     for source in all_sources:
-        v, s = score_source(source, query_tok)
+        v, s, sp = score_source(source, query_tok)
         if v + s > 0:
-            scored.append((source, v, s))
+            scored.append((source, v, s, sp))
 
     if not scored:
         return []
@@ -185,45 +210,52 @@ def source_targeted_search(query: str, top_k_per_source: int = 10) -> List[Dict]
     # ── vehicle-level hard filter ─────────────────────────────
     if max_v >= 2:
         # Strong vehicle signal: keep ONLY sources from the best-matching vehicle.
-        # Find the vehicle folder of the top-scoring source, then filter to all
-        # sources that share that same vehicle folder.
         top_vehicle_sources = [x for x in scored if x[1] == max_v]
-        top_vehicle_sources.sort(key=lambda x: x[2], reverse=True)
+        top_vehicle_sources.sort(key=lambda x: (x[3], x[2]), reverse=True)
 
         # Identify the winning vehicle folder
         winning_vehicle_folder, _, _ = parse_path_levels(top_vehicle_sources[0][0])
 
-        # Keep ALL sources under that vehicle folder (they will be further
-        # ranked by system_score)
+        # Keep ALL sources under that vehicle folder
         vehicle_candidates = [
             x for x in scored
             if parse_path_levels(x[0])[0] == winning_vehicle_folder
         ]
-        vehicle_candidates.sort(key=lambda x: x[2], reverse=True)
+
+        # Within this vehicle: if any source has a positive sys_folder_specific
+        # match, HARD-filter to only those (e.g. "Fuel System" keeps FUEL SYS
+        # and drops LUB SYS / BRAKE SYS / COOLING SYS even though they share
+        # the same filename).
+        max_sp = max((x[3] for x in vehicle_candidates), default=0)
+        if max_sp > 0:
+            vehicle_candidates = [x for x in vehicle_candidates if x[3] == max_sp]
+
+        vehicle_candidates.sort(key=lambda x: (x[3], x[2]), reverse=True)
         selected = vehicle_candidates[:3]
 
     else:
-        # No strong vehicle discriminator: rank by total score
-        scored.sort(key=lambda x: x[1] + x[2], reverse=True)
-        # Require at least 2 total matches
-        selected = [x for x in scored if x[1] + x[2] >= 2][:3]
+        # No strong vehicle discriminator: rank by specific-match first, then total
+        scored.sort(key=lambda x: (x[3], x[1] + x[2]), reverse=True)
+        # Require either a specific system match OR >=2 total tokens
+        selected = [x for x in scored if x[3] >= 1 or (x[1] + x[2]) >= 2][:3]
 
     if not selected:
         return []
 
-    print(f"🎯 Targeted sources: {[(s[0].split('/')[-2]+'/'+s[0].split('/')[-1], s[1], s[2]) for s in selected]}")
+    print(f"🎯 Targeted sources: {[(s[0].split('/')[-2]+'/'+s[0].split('/')[-1], s[1], s[2], s[3]) for s in selected]}")
 
     # ── fetch chunks from selected sources ────────────────────
     chunks: List[Dict] = []
-    for source, v_score, s_score in selected:
-        base_score = min(0.95, 0.45 + 0.1 * (v_score + s_score))
+    for source, v_score, s_score, sp_score in selected:
+        base_score = min(0.95, 0.45 + 0.08 * (v_score + s_score) + 0.12 * sp_score)
+        chunk_must = [FieldCondition(key="source", match=MatchValue(value=source))]
+        if section_filter:
+            chunk_must.append(FieldCondition(key="section", match=MatchValue(value=section_filter)))
         results, _ = client.scroll(
             collection_name=COLLECTION_NAME,
             limit=top_k_per_source,
             with_payload=True,
-            scroll_filter=Filter(
-                must=[FieldCondition(key="source", match=MatchValue(value=source))]
-            )
+            scroll_filter=Filter(must=chunk_must)
         )
         for r in results:
             text = r.payload.get("text", "").strip()
@@ -245,16 +277,22 @@ def source_targeted_search(query: str, top_k_per_source: int = 10) -> List[Dict]
 # DENSE SEARCH
 # ─────────────────────────────────────────────────────────────
 
-def dense_search(query: str, top_k: int = 10) -> List[Dict]:
+def dense_search(query: str, top_k: int = 10, section_filter: str = None) -> List[Dict]:
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
     embedding_service = get_embedding_service()
     query_vector = embedding_service.embed_query(query)
 
     client = get_qdrant_client()
+    qfilter = None
+    if section_filter:
+        qfilter = Filter(must=[FieldCondition(key="section", match=MatchValue(value=section_filter))])
+
     results = client.query_points(
         collection_name=COLLECTION_NAME,
         query=query_vector,
         limit=top_k,
-        with_payload=True
+        with_payload=True,
+        query_filter=qfilter
     ).points
 
     return [
@@ -295,12 +333,16 @@ def reciprocal_rank_fusion(result_lists: List[List[Dict]], k: int = 60) -> List[
 
 def path_boost_after_rerank(query: str, chunks: List[Dict], boost: float = 0.6) -> List[Dict]:
     """
-    Apply two-level path scoring on top of reranker scores.
+    Apply two-level path scoring on top of reranker scores, with two hard filters:
 
-    Hard vehicle filter: if ANY chunk scores vehicle_match >= 2, all chunks
-    from wrong vehicles (vehicle_match < max) are removed entirely before
-    re-sorting. This prevents high-text-score chunks from wrong vehicles
-    (e.g. SAFARI manual scoring high on 'steering') from surviving.
+    1. Vehicle hard filter: if ANY chunk has v_score >= 2, drop all chunks
+       from other vehicles. Prevents cross-vehicle contamination.
+
+    2. System-folder hard filter: within the surviving vehicle, if ANY chunk
+       has sys_folder_specific >= 1, drop all chunks with sp < max_sp.
+       This discriminates folders whose filenames are identical (same manual
+       copied into every system folder): only the folder whose NAME matches
+       the content-specific query tokens survives.
     """
     query_tok = expand_tokens(tokenize(query))
     if not query_tok:
@@ -308,19 +350,25 @@ def path_boost_after_rerank(query: str, chunks: List[Dict], boost: float = 0.6) 
 
     # Score every chunk
     for chunk in chunks:
-        v, s = score_source(chunk.get("source", ""), query_tok)
-        chunk["_v"] = v
-        chunk["_s"] = s
+        v, s, sp = score_source(chunk.get("source", ""), query_tok)
+        chunk["_v"]  = v
+        chunk["_s"]  = s
+        chunk["_sp"] = sp
 
     max_v = max((c["_v"] for c in chunks), default=0)
 
-    # Hard vehicle filter: only apply when there's a strong vehicle signal
+    # Hard vehicle filter
     if max_v >= 2:
         chunks = [c for c in chunks if c["_v"] == max_v]
 
-    # Boost remaining chunks by system-level relevance
+    # Hard system-folder filter (within the surviving vehicle set)
+    max_sp = max((c["_sp"] for c in chunks), default=0)
+    if max_sp >= 1:
+        chunks = [c for c in chunks if c["_sp"] == max_sp]
+
+    # Boost remaining chunks — specific matches are worth more than raw overlap
     for chunk in chunks:
-        multiplier = 1 + boost * (chunk["_v"] + chunk["_s"])
+        multiplier = 1 + boost * (chunk["_v"] + chunk["_s"]) + 1.2 * boost * chunk["_sp"]
         base = chunk.get("reranker_score", chunk.get("rrf_score", chunk.get("score", 0)))
         chunk["reranker_score"] = base * multiplier
 
@@ -336,8 +384,8 @@ def extract_keywords(query: str) -> List[str]:
     return list(tokenize(query))
 
 
-def retrieve(query: str, top_k: int = 5) -> List[Dict]:
-    print(f"🔍 Retrieving: {query}")
+def retrieve(query: str, top_k: int = 5, section_filter: str = None) -> List[Dict]:
+    print(f"🔍 Retrieving: {query}" + (f" [section={section_filter}]" if section_filter else ""))
 
     # Genuinely diverse query variations
     kw_query   = " ".join(tokenize(query))
@@ -348,30 +396,50 @@ def retrieve(query: str, top_k: int = 5) -> List[Dict]:
 
     all_lists = []
     for q in variations:
-        all_lists.append(dense_search(q, top_k=top_k * 6))
+        all_lists.append(dense_search(q, top_k=top_k * 6, section_filter=section_filter))
 
     fused = reciprocal_rank_fusion(all_lists)
 
-    # Inject source-targeted chunks (guarantees correct vehicle files in pool)
-    targeted = source_targeted_search(query)
+    # Inject source-targeted chunks first so they are never cut off by top_k slice
+    targeted = source_targeted_search(query, section_filter=section_filter)
     if targeted:
-        existing = {c["text"][:100] for c in fused}
-        added = 0
-        for chunk in targeted:
-            if chunk["text"][:100] not in existing:
-                fused.append(chunk)
-                existing.add(chunk["text"][:100])
-                added += 1
-        print(f"🎯 Injected {added} targeted chunks")
+        existing_dense = {c["text"][:100] for c in fused}
+        targeted_unique = [c for c in targeted if c["text"][:100] not in existing_dense]
+        print(f"🎯 Injecting {len(targeted_unique)} targeted chunks (prepended)")
+        targeted_keys = {c["text"][:100] for c in targeted_unique}
+        dense_remainder = [c for c in fused if c["text"][:100] not in targeted_keys]
+        combined = targeted_unique + dense_remainder
+    else:
+        combined = fused
 
-    return fused[:top_k]
+    return combined[:top_k]
 
 
 # ─────────────────────────────────────────────────────────────
 # MULTI-QUERY RETRIEVE (question paper)
 # ─────────────────────────────────────────────────────────────
 
-def retrieve_multi(queries: List[str], top_k: int = 20) -> List[Dict]:
+def retrieve_multi(
+    queries: List[str],
+    top_k: int = 20,
+    topic: str = "",
+    selected_sources: List[str] = None,
+) -> List[Dict]:
+    """
+    Multi-query retrieval with RRF fusion for question paper generation.
+
+    Each query angle is embedded and searched independently; results are
+    fused with RRF so chunks that rank well across multiple angles get a
+    higher combined score.  Source-targeted chunks (path-matched) are
+    prepended so they are never cut off by the top_k slice.
+
+    If `selected_sources` is a non-empty list, retrieval is hard-restricted
+    to only those source paths — path_match and dense search are both
+    filtered, and if no chunks remain the top-k from a pure source scroll
+    is returned as fallback.
+    """
+    from qdrant_client.models import Filter, FieldCondition, MatchValue, MatchAny
+
     embedding_service = get_embedding_service()
     vectors = embedding_service.model.encode_queries(queries)
 
@@ -380,10 +448,16 @@ def retrieve_multi(queries: List[str], top_k: int = 20) -> List[Dict]:
         vectors = vectors.tolist()
 
     client = get_qdrant_client()
-    seen_texts: Set[str] = set()
-    all_chunks: List[Dict] = []
-    reference_query = queries[0] if queries else ""
 
+    # Build Qdrant filter restricting to selected sources (OR across source paths)
+    source_filter = None
+    if selected_sources:
+        source_filter = Filter(
+            must=[FieldCondition(key="source", match=MatchAny(any=selected_sources))]
+        )
+
+    # Collect one result list per query angle
+    per_query_lists: List[List[Dict]] = []
     for vector in vectors:
         if isinstance(vector, np.ndarray):
             vector = vector.tolist()
@@ -393,31 +467,65 @@ def retrieve_multi(queries: List[str], top_k: int = 20) -> List[Dict]:
             collection_name=COLLECTION_NAME,
             query=vector,
             limit=top_k,
-            with_payload=True
+            with_payload=True,
+            query_filter=source_filter,
         ).points
 
-        for r in results:
-            text = r.payload["text"].strip()
-            if text and text not in seen_texts:
-                seen_texts.add(text)
-                all_chunks.append({
-                    "text": text,
-                    "source": r.payload["source"],
-                    "chunk_index": r.payload["chunk_index"],
-                    "score": r.score,
-                    "rrf_score": r.score,
-                    "reranker_score": r.score,
-                    "retriever": "dense"
-                })
+        per_query_lists.append([
+            {
+                "text": r.payload["text"].strip(),
+                "source": r.payload["source"],
+                "chunk_index": r.payload["chunk_index"],
+                "score": r.score,
+                "rrf_score": r.score,
+                "reranker_score": r.score,
+                "retriever": "dense"
+            }
+            for r in results if r.payload.get("text", "").strip()
+        ])
 
-    if reference_query:
-        targeted = source_targeted_search(reference_query)
-        for chunk in targeted:
-            if chunk["text"] not in seen_texts:
-                seen_texts.add(chunk["text"])
-                all_chunks.append(chunk)
+    # RRF fusion across all query angles
+    fused = reciprocal_rank_fusion(per_query_lists)
 
-    return all_chunks
+    # When user selected specific docs, skip path-match targeting (they
+    # already told us exactly which files to use) and guarantee coverage
+    # by scrolling extra chunks from the selected sources if dense search
+    # returned too few.
+    if selected_sources:
+        if len(fused) < top_k * 2:
+            extra_results, _ = client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=top_k * 4,
+                with_payload=True,
+                scroll_filter=source_filter,
+            )
+            existing = {c["text"][:100] for c in fused}
+            for r in extra_results:
+                text = (r.payload or {}).get("text", "").strip()
+                if text and text[:100] not in existing:
+                    fused.append({
+                        "text": text,
+                        "source": r.payload.get("source", ""),
+                        "chunk_index": r.payload.get("chunk_index", 0),
+                        "score": 0.3,
+                        "rrf_score": 0.3,
+                        "reranker_score": 0.3,
+                        "retriever": "scroll_fill",
+                    })
+                    existing.add(text[:100])
+        return fused
+
+    # Source-targeted chunks for the raw topic (prepended, never cut off)
+    raw_topic = topic or (queries[0] if queries else "")
+    targeted = source_targeted_search(raw_topic)
+    if targeted:
+        fused_keys = {c["text"][:100] for c in fused}
+        targeted_unique = [c for c in targeted if c["text"][:100] not in fused_keys]
+        targeted_keys = {c["text"][:100] for c in targeted_unique}
+        dense_remainder = [c for c in fused if c["text"][:100] not in targeted_keys]
+        return targeted_unique + dense_remainder
+
+    return fused
 
 
 # ─────────────────────────────────────────────────────────────
@@ -425,8 +533,19 @@ def retrieve_multi(queries: List[str], top_k: int = 20) -> List[Dict]:
 # ─────────────────────────────────────────────────────────────
 
 if __name__ == "__main__":
-    # Test path scoring without hitting Qdrant
+    # Test path scoring without hitting Qdrant.
+    # Critical discrimination test: "Fuel System" on MG 413W. The same file
+    # (Field manual of MG 413 MPFI.pdf) lives in ALL 9 system folders, so the
+    # filename tokens tie them. Only sys_folder_specific should separate them.
     test_cases = [
+        ("Fuel System",
+         "/home/hpc25/Downloads/LVG/LVG/3. MG 413W MPFI/3. FUEL SYS/Field manual of MG 413 MPFI.pdf"),
+        ("Fuel System",
+         "/home/hpc25/Downloads/LVG/LVG/3. MG 413W MPFI/4. LUB SYS/Field manual of MG 413 MPFI.pdf"),
+        ("Fuel System",
+         "/home/hpc25/Downloads/LVG/LVG/3. MG 413W MPFI/5. COOLING SYS/Field manual of MG 413 MPFI.pdf"),
+        ("Fuel System",
+         "/home/hpc25/Downloads/LVG/LVG/3. MG 413W MPFI/6. BRAKE SYS/Field manual of MG 413 MPFI.pdf"),
         ("steering system for MG 413W",
          "/home/hpc25/Downloads/LVG/LVG/3. MG 413W MPFI/9. Steering sys/Field manual of MG 413 MPFI.pdf"),
         ("steering system for MG 413W",
@@ -439,8 +558,8 @@ if __name__ == "__main__":
 
     for query, source in test_cases:
         qtok = expand_tokens(tokenize(query))
-        v, s = score_source(source, qtok)
+        v, s, sp = score_source(source, qtok)
         vf, sf, fn = parse_path_levels(source)
         print(f"\nQuery : {query}")
         print(f"Source: .../{vf}/{sf}/{fn}")
-        print(f"Scores: vehicle={v}  system={s}  total={v+s}")
+        print(f"Scores: vehicle={v}  system={s}  specific={sp}")

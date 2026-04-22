@@ -1,0 +1,408 @@
+================================================================
+RAG SYSTEM — CODEBASE REFERENCE
+================================================================
+Quick reference for every file: what it does, what's important,
+and what to watch out for when modifying it.
+================================================================
+
+
+----------------------------------------------------------------
+api/main.py  —  FastAPI Application (all HTTP endpoints)
+----------------------------------------------------------------
+WHAT IT DOES:
+  Entry point for the web server. Defines all REST endpoints,
+  orchestrates the retrieval → reranking → generation pipeline,
+  and serves the frontend SPA.
+
+KEY MODELS (Pydantic):
+  QueryRequest    — question, top_k=5, source_filter="all"|"chat"|"prompt"
+  PaperRequest    — topic, difficulty, num_questions, types[], instructions=""
+  GenerateRequest — prompt, top_k, max_tokens, temperature
+
+KEY ENDPOINTS AND THEIR PIPELINE:
+  POST /query  (Chat)
+    1. retrieve(question, top_k=50, section_filter)   → raw_chunks
+    2. dedup on text[:100]
+    3. BGE Reranker → top-15
+    4. path_boost_after_rerank() → top-5
+    5. vLLM chat/completions (temp=0.1, max_tokens=2048)
+    6. evaluate_response() — LLM-as-judge
+    Returns: answer, verdict, scores{faithfulness, hallucination, completeness}, sources[]
+
+  POST /generate-paper  (Question Paper)
+    1. retrieve_multi(4 query angles, top_k=20)
+    2. path_boost_after_rerank() → top-40 chunks  [NO reranker, for speed]
+    3. Interleave chunks round-robin across sources + shuffle
+    4. asyncio.gather(*[generate_one(...) for each question])  ← all parallel
+    5. Parse JSON per question
+    Returns: paper{mcq[], short[], long[]}, sources[], latency_ms
+
+  POST /upload  (File upload from browser)
+    - Saves to /tmp/rag_uploads/<section>/<filename>
+    - Duplicate check: exact filepath must NOT already be in Qdrant
+      (same filename from different folders is NOT a duplicate)
+    - Calls ingest_document(filepath, section=section)
+
+  GET /documents?section=chat
+    - Scrolls entire Qdrant collection with payload filter
+    - Groups by source path, counts chunks per doc
+    - Optional section filter
+
+  DELETE /documents?source=<path>
+    - Deletes all Qdrant points matching source path
+    - Also removes file from disk if it lives in /tmp/rag_uploads/
+
+IMPORTANT CONSTANTS:
+  UPLOAD_DIR = "/tmp/rag_uploads"   ← files are temporary, not persistent
+  _max_tokens_map = {mcq: 200, short: 280, long: 450}   ← keep small for speed
+  timeout=300 for paper generation httpx client
+  timeout=60  for chat query httpx client
+
+WATCH OUT FOR:
+  - source_filter "all" → passes None to retrieve() (no Qdrant filter)
+  - Paper generation skips cross-encoder reranker intentionally (speed)
+  - asyncio.gather sends ALL question prompts simultaneously to vLLM
+
+
+----------------------------------------------------------------
+ingestion/pipeline.py  —  Document Parsing & Ingestion
+----------------------------------------------------------------
+WHAT IT DOES:
+  Parses documents with Docling, chunks text, embeds with BGE-Large,
+  and upserts into Qdrant. Also tracks which files are already ingested.
+
+KEY FUNCTIONS:
+  parse_document(file_path)
+    - txt/csv: read directly (Docling doesn't support these)
+    - All others: Docling DocumentConverter → export_to_markdown()
+    - Also extracts image references: page number + surrounding text context
+      (since images can't be embedded as vectors, their context is stored as text)
+    Returns: (full_text, image_references[])
+
+  chunk_text(text, chunk_size=256, overlap=64)
+    - Word-based sliding window chunker
+    - 256-word chunks with 64-word overlap for context continuity
+
+  get_ingested_files()
+    - Scrolls Qdrant, collects all unique "source" payload values
+    - Returns a set of absolute file paths already in the DB
+    - Used for duplicate detection before ingestion
+
+  ingest_document(file_path, section="all")
+    - Full pipeline: parse → chunk → embed (batch=128) → upsert
+    - Each Qdrant point payload:
+        text, source (abs path), filename, chunk_index,
+        chunk_type (text|image_reference), file_type, section
+    - section tag controls which UI tab's filter sees this doc
+
+  ingest_folder(folder_path)
+    - os.walk() to find all SUPPORTED_EXTENSIONS files
+    - Skips ~$ temp files (Office lock files)
+    - Skips already-ingested files (checks against get_ingested_files())
+
+SUPPORTED EXTENSIONS: .pdf .docx .pptx .md .txt .html .csv
+
+WATCH OUT FOR:
+  - Images are NOT embedded as vectors. Their surrounding text context
+    is stored as a text chunk so they are findable by semantic search.
+  - Embedding batch size 128 — large documents may take 30-60 seconds.
+  - ingest_folder() does NOT re-ingest already-ingested files.
+    To re-ingest, delete from Qdrant first via DELETE /documents.
+
+
+----------------------------------------------------------------
+retrieval/search.py  —  Core Retrieval Logic
+----------------------------------------------------------------
+WHAT IT DOES:
+  All search, scoring, and re-ranking logic. This is the most complex
+  file in the project. Handles semantic search, path-based targeting,
+  RRF fusion, and cross-vehicle filtering.
+
+KEY CONSTANTS:
+  STOPWORDS — common words filtered out of query tokens
+  ABBREV — abbreviation expansion map:
+    sys → system, susp → suspension, lub → lubrication,
+    txn → transmission, eng → engine, brk → brake, etc.
+    Used BIDIRECTIONALLY: folder abbreviations match query words AND
+    query words match folder abbreviations.
+
+KEY FUNCTIONS:
+
+  tokenize(text) → Set[str]
+    Extracts lowercase alphanumeric tokens, strips stopwords, len > 1.
+
+  expand_tokens(tokens) → Set[str]
+    Adds abbreviation expansions so "SUSP" also yields "suspension"
+    and vice versa. Enables folder-path matching against natural queries.
+
+  parse_path_levels(source) → (vehicle_folder, system_folder, filename)
+    Parses numbered folder hierarchy from source paths.
+    Numbered = starts with digit+dot (e.g. "3. MG 413W MPFI").
+    First numbered folder = vehicle, second = system.
+
+  score_source(source, query_tok) → (vehicle_score, system_score)
+    Counts token overlap between query and each path level.
+    Uses abbreviation-expanded path tokens.
+
+  source_targeted_search(query, top_k_per_source=10, section_filter=None)
+    1. Scroll Qdrant for all unique source paths
+    2. Score each source → (v_score, s_score)
+    3. HARD VEHICLE FILTER: if max v_score >= 2, keep ONLY that vehicle
+    4. Top-3 sources by system_score selected
+    5. Fetch top_k_per_source chunks from each selected source
+    Returns chunks with retriever="path_match"
+
+  dense_search(query, top_k, section_filter) → List[Dict]
+    BGE-Large embed → Qdrant HNSW query with optional section filter.
+
+  reciprocal_rank_fusion(result_lists, k=60) → List[Dict]
+    Standard RRF: score = Σ 1/(60 + rank) across all lists.
+    Keyed on text[:100] for dedup.
+
+  path_boost_after_rerank(query, chunks, boost=0.6) → List[Dict]
+    Applied AFTER reranker or RRF sorting:
+    1. Score all chunks by (v_score, s_score)
+    2. HARD VEHICLE FILTER: remove chunks from non-winning vehicles
+       if any chunk has v_score >= 2
+    3. Multiply base score by (1 + 0.6 * (v + s)) for remaining chunks
+    4. Re-sort by boosted score
+
+  retrieve(query, top_k=5, section_filter=None) → List[Dict]
+    Full single-query retrieval pipeline:
+    - dense_search × 3 query variations (original, keywords-only, technical)
+    - RRF fusion
+    - Prepend source_targeted_search() results
+    Returns combined[:top_k]
+
+  retrieve_multi(queries, top_k=20, topic="") → List[Dict]
+    Batch-embeds all queries at once (single GPU pass).
+    Searches Qdrant once per query angle.
+    RRF fuses all result lists.
+    Prepends source_targeted_search() for the raw topic.
+    Used by /generate-paper for 4-angle retrieval.
+
+WATCH OUT FOR:
+  - source_targeted_search scrolls ALL Qdrant points to find unique sources.
+    With Qdrant payload indexes on "section" and "source" this is fast.
+    Without indexes, it degrades to full collection scan.
+  - Hard vehicle filter (v_score >= 2) can discard chunks you want if the
+    query has 2+ vehicle-specific tokens but you actually want all vehicles.
+  - retrieve_multi does NOT apply section_filter (used for paper generation
+    which should search all sections).
+
+
+----------------------------------------------------------------
+utils/embeddings.py  —  BGE-Large Embedding Service
+----------------------------------------------------------------
+WHAT IT DOES:
+  Singleton wrapper around BAAI/bge-large-en-v1.5 (FlagModel).
+  Produces 1024-dim embeddings used for both ingestion and retrieval.
+
+KEY DETAILS:
+  - Loaded FP16 on GPU (cuda:1 if 2+ GPUs, else cuda:0, else cpu)
+  - embed_documents(texts) → uses encode_single_device (batch processing)
+  - embed_query(query)     → uses encode_queries (adds query instruction prefix)
+    The query instruction "Represent this sentence for searching relevant
+    passages:" is critical — it aligns query embedding space with document
+    embedding space for this model.
+  - Returns clean Python list[float] (not numpy arrays)
+  - Singleton: loaded once on first call to get_embedding_service()
+    First call takes ~10 seconds.
+
+
+----------------------------------------------------------------
+utils/reranker.py  —  BGE Reranker v2-m3
+----------------------------------------------------------------
+WHAT IT DOES:
+  Cross-encoder reranker. Unlike embedding models (which encode query and
+  document independently), a cross-encoder sees (query, document) together
+  for much higher accuracy. Slower but more precise.
+
+KEY DETAILS:
+  - Model: BAAI/bge-reranker-v2-m3 (FP16)
+  - rerank(query, chunks, top_k=5):
+      1. Build pairs: [[query, chunk_text], ...]
+      2. compute_score(pairs, normalize=True) → scores 0.0–1.0
+      3. IMPORTANT: handles numpy scalar return (single chunk edge case)
+         Uses isinstance check + list conversion before iterating
+      4. Sort by reranker_score, return top_k
+  - Singleton: loaded once on first call to get_reranker()
+
+WATCH OUT FOR:
+  - Only used in /query (chat), NOT in /generate-paper
+  - Processing 50 chunks takes ~10-15 seconds on GPU
+  - numpy scalar bug: compute_score returns scalar (not list) for 1 chunk.
+    Already fixed with: `if not isinstance(scores, (list, np.ndarray)): scores = [scores]`
+
+
+----------------------------------------------------------------
+utils/qdrant_setup.py  —  Qdrant Collection Management
+----------------------------------------------------------------
+WHAT IT DOES:
+  Creates the Qdrant collection with HNSW config and ensures payload
+  indexes exist for fast filtered operations.
+
+KEY DETAILS:
+  - Collection: "rag_documents" (from env QDRANT_COLLECTION)
+  - Vector: 1024-dim cosine, HNSW (m=16, ef_construct=100)
+  - Payload indexes on "section" (KEYWORD) and "source" (KEYWORD)
+    These are critical for fast scrolls in /documents endpoint and
+    source_targeted_search(). Without them, every scroll is a full scan.
+  - create_collection() called at app startup (app.on_event("startup"))
+  - _ensure_payload_indexes() is idempotent — safe to call repeatedly
+
+
+----------------------------------------------------------------
+utils/cache.py  —  Redis Semantic Cache
+----------------------------------------------------------------
+WHAT IT DOES:
+  Caches query answers by semantic similarity. Avoids hitting vLLM for
+  near-duplicate questions.
+
+KEY DETAILS:
+  - Stores: {query text, query embedding, full response JSON} in Redis
+  - Lookup: compare new query embedding against ALL cached embeddings
+    via cosine similarity. Hit if similarity >= 0.95 (configurable).
+  - TTL: 3600 seconds (1 hour) per cached entry
+  - Key format: "query_embedding:<md5(query)>"
+  - Singleton: get_cache() — fails fast if Redis is not running
+
+NOTE: The cache is checked but not currently integrated into the
+/query endpoint's main flow (it's available via cache_stats/clear_cache
+endpoints). The semantic cache logic exists in cache.py but /query
+does not call get_cached_response() — it always runs fresh retrieval.
+
+
+----------------------------------------------------------------
+utils/evaluator.py  —  LLM-as-Judge
+----------------------------------------------------------------
+WHAT IT DOES:
+  After every /query response, sends a second vLLM call to evaluate
+  answer quality. Returns scores used for the UI quality indicators.
+
+KEY DETAILS:
+  - Asks vLLM to output JSON with:
+      faithfulness  (0.0–1.0): is answer grounded in context?
+      hallucination (0.0–1.0): 0=none, 1=fully hallucinated
+      completeness  (0.0–1.0): does it fully answer the question?
+      verdict: "PASS" or "FAIL"
+      reason: one sentence
+  - max_tokens=256, temperature=0.0 (deterministic)
+  - Failures default to FAIL / faithfulness=0.0
+
+WATCH OUT FOR:
+  - Adds ~3-5 seconds to every chat response (extra vLLM call)
+  - If verdict != PASS or faithfulness < 0.8, "reason" is included in response
+
+
+----------------------------------------------------------------
+utils/pdf_generator.py  —  PDF Export
+----------------------------------------------------------------
+WHAT IT DOES:
+  Generates a formatted PDF question paper using reportlab.
+  Output: Question Paper (page 1) + Answer Key (page 2+).
+
+KEY DETAILS:
+  - Writes to /tmp/question_paper_<uuid>.pdf
+  - Sections: MCQ (A), Short Answer (B), Long Answer (C)
+  - Each question numbered continuously across sections
+  - Answer key on separate page after PageBreak
+  - MCQ answers show: "a) The correct option text"
+
+
+----------------------------------------------------------------
+utils/docx_generator.py  —  DOCX Export
+----------------------------------------------------------------
+WHAT IT DOES:
+  Same as pdf_generator but outputs .docx using python-docx.
+  Writes to /tmp/question_paper_<uuid>.docx.
+
+
+----------------------------------------------------------------
+frontend/index.html  —  Single-Page Application
+----------------------------------------------------------------
+WHAT IT DOES:
+  The entire UI in one file. Three tabs: Chat, Question Paper, Custom Prompt.
+  Pure vanilla JS — no React/Vue/Angular.
+
+KEY JS STATE:
+  sourceMode = { chat: 'all', prompt: 'all' }
+    Tracks which knowledge source mode is active per section.
+    'all' = search all ingested docs
+    'chat'/'prompt' = search only docs uploaded in that section
+
+KEY FUNCTIONS:
+  sendChat()          — POST /query with question + source_filter
+  generatePaper()     — POST /generate-paper with all form fields
+  runPrompt()         — POST /generate with prompt + source_filter
+  setSourceMode()     — updates sourceMode[section] and button styles
+  loadDocuments()     — GET /documents, populates doc list in sidebar
+  deleteDocument()    — DELETE /documents?source=...
+  downloadDocx/Pdf()  — POST /download/docx or /download/pdf
+
+KEY UI BEHAVIORS:
+  - Question Paper: answer key hidden by default, toggle button reveals it
+  - Sources accordion: collapsed by default, click to expand
+  - Eval scores shown as colored badges (PASS=green, FAIL=red)
+  - Question count slider: 1–200 (not 50)
+  - Upload: available in Chat and Custom Prompt tabs ONLY
+    (removed from Question Paper tab)
+  - Additional Instructions textarea in Question Paper form
+  - Source mode toggle buttons in Chat and Custom Prompt sidebars
+
+WATCH OUT FOR:
+  - Page-load doc count fetches REMOVED (caused slow tab switching)
+  - Documents are loaded on-demand when user opens the docs panel
+
+
+----------------------------------------------------------------
+docker-compose.yml  —  Container Orchestration
+----------------------------------------------------------------
+Defines 4 services:
+  qdrant     — qdrant/qdrant:latest, port 6333, volume qdrant_storage
+  redis      — redis:7-alpine, port 6379
+  vllm       — vllm/vllm-openai:latest, port 8000, 2x GPU, AWQ quantization
+  rag-api    — built from Dockerfile, port 9000 (container) → 9000 (host)
+               depends on healthy qdrant + redis + vllm
+
+NOTE: In current production setup, services are run manually (see STARTUP.txt),
+not via docker-compose. docker-compose is available for fully-containerized
+deployment but is NOT the active runtime.
+
+
+----------------------------------------------------------------
+STARTUP.txt
+----------------------------------------------------------------
+Step-by-step terminal commands to start all services manually:
+  Terminal 1: docker start qdrant redis
+  Terminal 2: vLLM GPU server
+  Terminal 3: uvicorn FastAPI server
+Includes verification commands, shutdown procedure, troubleshooting.
+
+
+================================================================
+COMMON DEBUGGING COMMANDS
+================================================================
+
+# Check all services are up:
+curl http://localhost:8001/services
+
+# Check what's ingested:
+curl "http://localhost:8001/documents" | python3 -m json.tool
+
+# Check ingestion status for a folder:
+curl "http://localhost:8001/ingestion-status?folder_path=/home/hpc25/Downloads/LVG"
+
+# Clear Redis cache:
+curl -X DELETE http://localhost:8001/cache/clear
+
+# Kill stale uvicorn process:
+pkill -f "uvicorn api.main:app"
+
+# Check Qdrant is ready:
+curl http://localhost:6333/readyz
+
+# Check vLLM is ready:
+curl http://localhost:8000/health
+
+================================================================

@@ -51,6 +51,7 @@ if os.path.exists("frontend"):
 class QueryRequest(BaseModel):
     question: str
     top_k: int = 5
+    source_filter: str = "all"   # "all" | "chat" | "prompt"
 
 class IngestRequest(BaseModel):
     file_path: str
@@ -64,6 +65,8 @@ class PaperRequest(BaseModel):
     difficulty: str
     num_questions: int
     types: list[str]
+    instructions: str = ""
+    selected_sources: list[str] = []   # empty = use all ingested docs
 
 class GenerateRequest(BaseModel):
     prompt: str
@@ -185,6 +188,15 @@ async def upload_document(
     os.makedirs(section_dir, exist_ok=True)
     filepath = os.path.join(section_dir, file.filename)
 
+    # Only flag as duplicate if this exact destination path is already in Qdrant
+    # (same filename from a different vehicle/system folder is NOT a duplicate)
+    from ingestion.pipeline import get_ingested_files
+    if filepath in get_ingested_files():
+        raise HTTPException(
+            status_code=409,
+            detail=f"'{file.filename}' is already uploaded in this section. Delete it first to replace."
+        )
+
     content = await file.read()
     with open(filepath, "wb") as f:
         f.write(content)
@@ -279,7 +291,8 @@ async def query(req: QueryRequest):
         # STEP 1 — RETRIEVE
         # =========================
         from retrieval.search import retrieve
-        raw_chunks = retrieve(req.question, top_k=50)
+        section_filter = req.source_filter if req.source_filter in ("chat", "prompt") else None
+        raw_chunks = retrieve(req.question, top_k=50, section_filter=section_filter)
 
         if not raw_chunks:
             raise HTTPException(status_code=404, detail="No relevant documents found")
@@ -382,7 +395,7 @@ async def query(req: QueryRequest):
                 {
                     "text": c["text"][:200],
                     "source": c.get("source", ""),
-                    "reranker_score": c["reranker_score"]
+                    "reranker_score": c.get("reranker_score", c.get("rrf_score", c.get("score", 0)))
                 }
                 for c in chunks
             ]
@@ -407,24 +420,32 @@ async def generate_paper(req: PaperRequest):
         # =========================
         # STEP 1 — RETRIEVE CONTEXT (multiple angles, single batched embedding)
         # =========================
+        # Four angles tuned for technical/vehicle manuals:
+        # broad topic + 3 specific angles that match the language in workshop manuals
         queries = [
-            f"{req.topic} concepts definitions principles",
-            f"{req.topic} mechanisms processes how it works",
-            f"{req.topic} applications examples real world",
-            f"{req.topic} analysis comparison advantages disadvantages",
+            req.topic,
+            f"{req.topic} components parts specifications construction",
+            f"{req.topic} working principle operation procedure steps",
+            f"{req.topic} maintenance inspection troubleshooting diagnosis",
         ]
 
-        all_chunks = retrieve_multi(queries, top_k=20)
+        all_chunks = retrieve_multi(
+            queries,
+            top_k=20,
+            topic=req.topic,
+            selected_sources=req.selected_sources,
+        )
 
         if not all_chunks:
-            raise HTTPException(status_code=404, detail="No relevant content found")
+            raise HTTPException(
+                status_code=404,
+                detail=("No content found in the selected documents."
+                        if req.selected_sources
+                        else "No relevant content found")
+            )
 
-        # =========================
-        # FILTER — drop chunks below relevance threshold (removes wrong documents)
-        # =========================
-        MIN_SCORE = 0.45
-        all_chunks = [c for c in all_chunks if c.get("score", 0) >= MIN_SCORE]
-
+        # Use reranker as the quality gate — skip the raw-score pre-filter
+        # (raw embedding scores are not comparable across RRF-fused results)
         if not all_chunks:
             raise HTTPException(
                 status_code=404,
@@ -435,18 +456,12 @@ async def generate_paper(req: PaperRequest):
         # RERANK — sort by cross-encoder score against the topic so the most
         # relevant chunks are at the front of the list
         # =========================
-        try:
-            from utils.reranker import get_reranker
-            from retrieval.search import path_boost_after_rerank
-            reranker = get_reranker()
-            all_chunks = reranker.rerank(req.topic, all_chunks, top_k=min(60, len(all_chunks)))
-            all_chunks = path_boost_after_rerank(req.topic, all_chunks)
-            all_chunks = all_chunks[:40]
-        except Exception as rerank_err:
-            print(f"⚠️ Reranker failed for paper: {rerank_err}")
-            from retrieval.search import path_boost_after_rerank
-            all_chunks = sorted(all_chunks, key=lambda x: x.get("score", 0), reverse=True)[:60]
-            all_chunks = path_boost_after_rerank(req.topic, all_chunks)[:40]
+        # For question paper we skip the cross-encoder (slow, designed for single-answer
+        # precision). Path boost on RRF scores is sufficient — it already hard-filters
+        # the correct vehicle/system and boosts relevant chunks.
+        from retrieval.search import path_boost_after_rerank
+        all_chunks = sorted(all_chunks, key=lambda x: x.get("rrf_score", x.get("score", 0)), reverse=True)
+        all_chunks = path_boost_after_rerank(req.topic, all_chunks)[:40]
 
         # =========================
         # STEP 2 — DISTRIBUTION
@@ -496,17 +511,41 @@ async def generate_paper(req: PaperRequest):
 
         answer_letters = ["a", "b", "c", "d"]
 
+        # Shuffle chunks within each source independently, then interleave sources
+        # so every question gets a random chunk from a random part of a random source.
+        from itertools import zip_longest as _zip_longest
+        _source_groups: dict = {}
+        for _c in all_chunks:
+            _src = _c.get("source", "")
+            _source_groups.setdefault(_src, []).append(_c)
+        # Shuffle within each source so we don't always start from the top
+        for _src_chunks in _source_groups.values():
+            random.shuffle(_src_chunks)
+        # Round-robin interleave across sources
+        interleaved_chunks = [
+            _c
+            for _group in _zip_longest(*_source_groups.values())
+            for _c in _group
+            if _c is not None
+        ]
+        _n_chunks = len(interleaved_chunks)
+
         def build_prompt(q_type: str, index: int) -> str:
-            # Rotate only within the top half of reranked chunks (all highly relevant)
-            # This gives variety across questions while never touching low-relevance chunks
-            pool_size = max(3, len(all_chunks) // 2)
-            chunk_start = (index * 2) % pool_size
-            ctx_chunks = all_chunks[chunk_start:chunk_start + 3]
+            # Pick 3 chunks randomly spread across the interleaved pool —
+            # each question starts at a different random offset within its slice.
+            slice_size = max(1, _n_chunks // max(total, 1))
+            slice_start = index * slice_size
+            # Pick a random position within this question's slice
+            offset = random.randint(0, max(0, slice_size - 1))
+            chunk_start = (slice_start + offset) % _n_chunks
+            ctx_chunks = interleaved_chunks[chunk_start:chunk_start + 3]
             if len(ctx_chunks) < 3:
-                ctx_chunks += all_chunks[:3 - len(ctx_chunks)]
-            context = "\n\n".join([c["text"][:500] for c in ctx_chunks])
+                ctx_chunks = ctx_chunks + interleaved_chunks[:3 - len(ctx_chunks)]
+            context = "\n\n".join([c["text"][:800] for c in ctx_chunks])
             focus = focus_angles[index % len(focus_angles)]
             correct = random.choice(answer_letters)
+
+            extra = f"\n- Additional instructions: {req.instructions}" if req.instructions.strip() else ""
 
             if q_type == "mcq":
                 return f"""You are an exam setter. Read the context carefully and generate 1 MCQ question.
@@ -517,7 +556,7 @@ STRICT RULES:
 - The correct answer MUST be option "{correct}"
 - The other 3 options must be plausible but clearly wrong based on the context
 - Focus on: {focus}
-- Difficulty: {req.difficulty}
+- Difficulty: {req.difficulty}{extra}
 
 Return ONLY valid JSON, no extra text:
 {{"question": "<question from context>", "options": {{"a": "<option>", "b": "<option>", "c": "<option>", "d": "<option>"}}, "answer": "{correct}"}}
@@ -532,7 +571,7 @@ STRICT RULES:
 - The question and answer MUST be based ONLY on information in the context below
 - Do NOT use any outside knowledge
 - Focus on: {focus}
-- Difficulty: {req.difficulty}
+- Difficulty: {req.difficulty}{extra}
 
 Return ONLY valid JSON, no extra text:
 {{"question": "<question from context>", "answer": "<concise answer from context>"}}
@@ -547,13 +586,16 @@ STRICT RULES:
 - The question and answer MUST be based ONLY on information in the context below
 - Do NOT use any outside knowledge
 - Focus on: {focus}
-- Difficulty: {req.difficulty}
+- Difficulty: {req.difficulty}{extra}
 
 Return ONLY valid JSON, no extra text:
 {{"question": "<question from context>", "answer": "<detailed answer from context>"}}
 
 Context:
 {context}"""
+
+        # Token budget per type — MCQ needs ~150, short ~250, long ~450
+        _max_tokens_map = {"mcq": 200, "short": 280, "long": 450}
 
         async def generate_one(client: httpx.AsyncClient, q_type: str, index: int):
             prompt = build_prompt(q_type, index)
@@ -565,7 +607,7 @@ Context:
                         "messages": [{"role": "user", "content": prompt}],
                         "temperature": 0.7,
                         "top_p": 0.9,
-                        "max_tokens": 512
+                        "max_tokens": _max_tokens_map.get(q_type, 300)
                     }
                 )
                 result = resp.json()
@@ -587,7 +629,7 @@ Context:
             [("long", i) for i in range(long)]
         )
 
-        async with httpx.AsyncClient(timeout=120) as client:
+        async with httpx.AsyncClient(timeout=300) as client:
             results = await asyncio.gather(*[
                 generate_one(client, q_type, idx)
                 for idx, (q_type, i) in enumerate(tasks_spec)

@@ -1,23 +1,21 @@
-version: '3.8'
-
 services:
   qdrant:
     image: qdrant/qdrant:latest
-    container_name: qdrant
+    container_name: rag-qdrant
     ports:
       - "6333:6333"
     volumes:
-      - qdrant_storage:/qdrant/storage
+      - ./qdrant_data:/qdrant/storage
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:6333/readyz"]
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333'"]
       interval: 10s
       timeout: 5s
       retries: 5
 
   redis:
     image: redis:7-alpine
-    container_name: redis
+    container_name: rag-redis
     ports:
       - "6379:6379"
     restart: unless-stopped
@@ -29,19 +27,19 @@ services:
 
   vllm:
     image: vllm/vllm-openai:latest
-    container_name: vllm
+    container_name: rag-vllm
     ports:
       - "8000:8000"
     volumes:
       - huggingface_cache:/root/.cache/huggingface
-    environment:
-      - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen2.5-14B-Instruct-AWQ}
+    ipc: host
     command: >
       --model ${VLLM_MODEL:-Qwen/Qwen2.5-14B-Instruct-AWQ}
       --quantization awq
-      --tensor-parallel-size 2
-      --max-model-len 32768
-      --gpu-memory-utilization 0.85
+      --tensor-parallel-size ${VLLM_TP_SIZE:-1}
+      --max-model-len ${VLLM_MAX_LEN:-32768}
+      --gpu-memory-utilization ${VLLM_GPU_UTIL:-0.85}
+      --port 8000
     deploy:
       resources:
         reservations:
@@ -54,16 +52,25 @@ services:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
-      retries: 10
-      start_period: 120s
+      retries: 20
+      start_period: 300s
 
   rag-api:
     build: .
     container_name: rag-api
     ports:
-      - "9000:9000"
-    env_file:
-      - .env
+      - "8001:8001"
+    environment:
+      - VLLM_HOST=http://vllm:8000
+      - VLLM_MODEL=${VLLM_MODEL:-Qwen/Qwen2.5-14B-Instruct-AWQ}
+      - QDRANT_HOST=http://qdrant:6333
+      - QDRANT_COLLECTION=rag_documents
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - FAITHFULNESS_THRESHOLD=0.8
+    volumes:
+      - ./uploads:/tmp/rag_uploads
+      - huggingface_cache:/root/.cache/huggingface
     depends_on:
       qdrant:
         condition: service_healthy
@@ -71,8 +78,14 @@ services:
         condition: service_healthy
       vllm:
         condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
     restart: unless-stopped
 
 volumes:
-  qdrant_storage:
   huggingface_cache:

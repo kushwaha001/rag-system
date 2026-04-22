@@ -1073,6 +1073,32 @@
 
   .upload-hint { font-size: 10px; color: var(--text3); font-family: var(--mono); pointer-events: none; }
 
+  /* Knowledge source mode toggle */
+  .src-mode-row {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .src-mode-btn {
+    flex: 1;
+    padding: 6px 0;
+    font-family: var(--mono);
+    font-size: 10px;
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    background: var(--bg3);
+    color: var(--text3);
+    cursor: pointer;
+    transition: all 0.15s;
+    text-align: center;
+  }
+  .src-mode-btn.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: #4f9eff12;
+  }
+  .src-mode-btn:hover:not(.active) { border-color: var(--text3); color: var(--text2); }
+
   .upload-progress {
     height: 2px;
     background: linear-gradient(90deg, var(--accent), var(--accent2), var(--accent));
@@ -1259,6 +1285,11 @@
           <span class="docs-count-badge" id="docs-count-chat">0</span>
         </div>
         <div class="chat-docs-body">
+          <!-- Source mode selector -->
+          <div class="src-mode-row">
+            <button class="src-mode-btn active" id="srcbtn-chat-all" onclick="setSourceMode('chat','all')">🌐 All Sources</button>
+            <button class="src-mode-btn" id="srcbtn-chat-chat" onclick="setSourceMode('chat','chat')">📤 Uploaded Only</button>
+          </div>
           <div class="upload-zone" id="upload-zone-chat"
             onclick="document.getElementById('file-input-chat').click()"
             ondragover="handleDragOver(event,'chat')"
@@ -1288,7 +1319,7 @@
       <div class="qp-form">
         <div class="section-title">// Paper Configuration</div>
 
-        <div class="form-group">
+        <div class="form-group" id="qp-topic-group">
           <div class="form-label">Topic / Subject Area</div>
           <input type="text" class="form-input" id="qp-topic" placeholder="e.g. Engine Troubleshooting, Transfer Case...">
         </div>
@@ -1320,7 +1351,7 @@
         <div class="form-group">
           <div class="form-label">Total Number of Questions</div>
           <div class="slider-row">
-            <input type="range" class="form-slider" id="qp-count" min="5" max="50" value="15" oninput="document.getElementById('qp-count-val').textContent=this.value">
+            <input type="range" class="form-slider" id="qp-count" min="5" max="200" value="15" oninput="document.getElementById('qp-count-val').textContent=this.value">
             <div class="slider-val" id="qp-count-val">15</div>
           </div>
         </div>
@@ -1350,37 +1381,43 @@
           <textarea class="form-textarea" id="qp-instructions" placeholder="e.g. Focus on practical troubleshooting, include diagram references..."></textarea>
         </div>
 
-        <button class="generate-btn" id="qp-btn" onclick="generatePaper()">
-          ⚡ Generate Question Paper
-        </button>
-
-        <!-- Document sources for this section -->
-        <div class="docs-section" style="margin-top:14px;">
-          <div class="docs-header" onclick="toggleDocs('paper')">
-            <div class="docs-header-left">
-              📁 Document Sources
-              <span class="docs-count-badge" id="docs-count-paper">0</span>
-            </div>
-            <span class="docs-toggle-arrow" id="docs-toggle-paper">▼</span>
+        <div class="form-group">
+          <div class="form-label">
+            Knowledge Source
+            <span style="font-weight:normal;font-size:10px;color:var(--text3);margin-left:8px;">(empty = all documents)</span>
           </div>
-          <div class="docs-body" id="docs-body-paper">
-            <div class="upload-zone" id="upload-zone-paper"
-              onclick="document.getElementById('file-input-paper').click()"
-              ondragover="handleDragOver(event,'paper')"
-              ondragleave="handleDragLeave('paper')"
-              ondrop="handleDrop(event,'paper')">
-              <input type="file" id="file-input-paper"
-                accept=".pdf,.docx,.pptx,.txt,.md,.html,.csv"
-                onchange="uploadFile('paper', this)">
-              <span class="upload-label">⬆ Upload Document</span>
-              <span class="upload-hint">PDF, DOCX, TXT, MD, CSV</span>
+          <div class="src-mode-row">
+            <button type="button" class="src-mode-btn active" id="qp-src-all"
+                    onclick="setQPSourceMode('all')">🌐 All Documents</button>
+            <button type="button" class="src-mode-btn" id="qp-src-pick"
+                    onclick="setQPSourceMode('pick')">✓ Pick Documents</button>
+          </div>
+          <div id="qp-doc-picker" style="display:none;margin-top:10px;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px;">
+              <span style="font-family:var(--mono);font-size:10px;color:var(--text3);">
+                <span id="qp-doc-selected-count">0</span> / <span id="qp-doc-total-count">0</span> selected
+              </span>
+              <div style="display:flex;gap:8px;">
+                <button type="button" onclick="qpSelectAllDocs(true)"
+                        style="background:none;border:1px solid var(--border);color:var(--text2);font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;">All</button>
+                <button type="button" onclick="qpSelectAllDocs(false)"
+                        style="background:none;border:1px solid var(--border);color:var(--text2);font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;">None</button>
+                <button type="button" onclick="loadQPDocList()"
+                        style="background:none;border:1px solid var(--border);color:var(--text2);font-family:var(--mono);font-size:9px;padding:2px 8px;border-radius:4px;cursor:pointer;">↻</button>
+              </div>
             </div>
-            <div class="upload-progress" id="upload-progress-paper"></div>
-            <div class="doc-list" id="doc-list-paper">
-              <div class="docs-empty">No documents yet</div>
+            <input type="text" id="qp-doc-filter" placeholder="Filter by filename or path..." oninput="filterQPDocList()"
+                   style="width:100%;background:var(--bg3);border:1px solid var(--border);color:var(--text1);font-family:var(--mono);font-size:11px;padding:6px 8px;border-radius:4px;margin-bottom:6px;">
+            <div id="qp-doc-list"
+                 style="max-height:220px;overflow-y:auto;border:1px solid var(--border);border-radius:5px;background:var(--bg3);padding:6px;">
+              <div style="font-family:var(--mono);font-size:11px;color:var(--text3);text-align:center;padding:20px;">Loading documents...</div>
             </div>
           </div>
         </div>
+
+        <button class="generate-btn" id="qp-btn" onclick="generatePaper()">
+          ⚡ Generate Question Paper
+        </button>
 
       </div>
 
@@ -1517,6 +1554,11 @@
                 <span class="docs-toggle-arrow" id="docs-toggle-prompt">▼</span>
               </div>
               <div class="docs-body" id="docs-body-prompt">
+                <!-- Source mode selector -->
+                <div class="src-mode-row" style="margin-top:8px;">
+                  <button class="src-mode-btn active" id="srcbtn-prompt-all" onclick="setSourceMode('prompt','all')">🌐 All Sources</button>
+                  <button class="src-mode-btn" id="srcbtn-prompt-prompt" onclick="setSourceMode('prompt','prompt')">📤 Uploaded Only</button>
+                </div>
                 <div class="upload-zone" id="upload-zone-prompt"
                   onclick="document.getElementById('file-input-prompt').click()"
                   ondragover="handleDragOver(event,'prompt')"
@@ -1664,6 +1706,15 @@
     document.getElementById('panel-' + tab).classList.add('active');
   }
 
+  // ===================== SOURCE MODE =====================
+  const sourceMode = { chat: 'all', prompt: 'all' };
+
+  function setSourceMode(section, mode) {
+    sourceMode[section] = mode;
+    document.getElementById(`srcbtn-${section}-all`)?.classList.toggle('active', mode === 'all');
+    document.getElementById(`srcbtn-${section}-${section}`)?.classList.toggle('active', mode === section);
+  }
+
   // ===================== CHAT =====================
   let chatHistory = [];
   let chatLoading = false;
@@ -1719,7 +1770,7 @@
       const res = await fetch(`${API}/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question, top_k: 5 })
+        body: JSON.stringify({ question, top_k: 5, source_filter: sourceMode.chat })
       });
 
       const data = await res.json();
@@ -1790,9 +1841,87 @@
     label.querySelector('input').checked = label.classList.contains('checked');
   }
 
+  // ---- Question Paper document picker ----
+  const qpDocState = { mode: 'all', docs: [], selected: new Set() };
+
+  function setQPSourceMode(mode) {
+    qpDocState.mode = mode;
+    document.getElementById('qp-src-all').classList.toggle('active', mode === 'all');
+    document.getElementById('qp-src-pick').classList.toggle('active', mode === 'pick');
+    document.getElementById('qp-doc-picker').style.display = (mode === 'pick') ? 'block' : 'none';
+    document.getElementById('qp-topic-group').style.display = (mode === 'pick') ? 'none' : '';
+    if (mode === 'pick' && qpDocState.docs.length === 0) loadQPDocList();
+  }
+
+  async function loadQPDocList() {
+    const listEl = document.getElementById('qp-doc-list');
+    listEl.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text3);text-align:center;padding:20px;">Loading documents...</div>';
+    try {
+      const res = await fetch(`${API}/documents`);
+      const data = await res.json();
+      qpDocState.docs = data.documents || [];
+      document.getElementById('qp-doc-total-count').textContent = qpDocState.docs.length;
+      renderQPDocList();
+    } catch (e) {
+      listEl.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--danger);text-align:center;padding:20px;">Failed to load documents</div>';
+    }
+  }
+
+  function renderQPDocList() {
+    const listEl = document.getElementById('qp-doc-list');
+    const filter = (document.getElementById('qp-doc-filter')?.value || '').toLowerCase();
+    if (!qpDocState.docs.length) {
+      listEl.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text3);text-align:center;padding:20px;">No documents ingested yet</div>';
+      return;
+    }
+    const filtered = qpDocState.docs.filter(d =>
+      (d.filename || '').toLowerCase().includes(filter) ||
+      (d.source || '').toLowerCase().includes(filter)
+    );
+    if (!filtered.length) {
+      listEl.innerHTML = '<div style="font-family:var(--mono);font-size:11px;color:var(--text3);text-align:center;padding:12px;">No match</div>';
+      return;
+    }
+    listEl.innerHTML = filtered.map(d => {
+      const checked = qpDocState.selected.has(d.source) ? 'checked' : '';
+      const srcShort = d.source.split('/').slice(-3, -1).join('/');
+      return `
+        <label style="display:flex;gap:8px;align-items:flex-start;padding:6px 4px;border-bottom:1px solid var(--border);cursor:pointer;">
+          <input type="checkbox" ${checked} onchange="toggleQPDoc('${escapeHtml(d.source).replace(/'/g, "\\'")}', this.checked)"
+                 style="margin-top:3px;flex-shrink:0;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-family:var(--mono);font-size:11px;color:var(--text1);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">📄 ${escapeHtml(d.filename)}</div>
+            <div style="font-family:var(--mono);font-size:9px;color:var(--text3);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${escapeHtml(d.source)}">${escapeHtml(srcShort)} · ${d.chunk_count}c</div>
+          </div>
+        </label>`;
+    }).join('');
+    document.getElementById('qp-doc-selected-count').textContent = qpDocState.selected.size;
+  }
+
+  function toggleQPDoc(source, checked) {
+    if (checked) qpDocState.selected.add(source);
+    else qpDocState.selected.delete(source);
+    document.getElementById('qp-doc-selected-count').textContent = qpDocState.selected.size;
+  }
+
+  function qpSelectAllDocs(selectAll) {
+    const filter = (document.getElementById('qp-doc-filter')?.value || '').toLowerCase();
+    const visible = qpDocState.docs.filter(d =>
+      (d.filename || '').toLowerCase().includes(filter) ||
+      (d.source || '').toLowerCase().includes(filter)
+    );
+    if (selectAll) visible.forEach(d => qpDocState.selected.add(d.source));
+    else visible.forEach(d => qpDocState.selected.delete(d.source));
+    renderQPDocList();
+  }
+
+  function filterQPDocList() { renderQPDocList(); }
+
   async function generatePaper() {
-    const topic = document.getElementById('qp-topic').value.trim();
-    if (!topic) { showToast('Please enter a topic', 'error'); return; }
+    const isPick = qpDocState.mode === 'pick';
+    const CORPS_HEADER = 'Corps of Electronics and Mechanical Engineers';
+    const topic = isPick ? CORPS_HEADER : document.getElementById('qp-topic').value.trim();
+    if (!isPick && !topic) { showToast('Please enter a topic', 'error'); return; }
 
     const qtypes = Array.from(document.querySelectorAll('#qtype-grid input:checked'))
     .map(i => {
@@ -1811,6 +1940,16 @@
     const marks = document.getElementById('qp-marks').value;
     const instructions = document.getElementById('qp-instructions').value;
 
+    // Document selection: empty list = use all ingested docs
+    let selectedSources = [];
+    if (qpDocState.mode === 'pick') {
+      selectedSources = Array.from(qpDocState.selected);
+      if (selectedSources.length === 0) {
+        showToast('Select at least one document, or switch to "All Documents"', 'error');
+        return;
+      }
+    }
+
     const btn = document.getElementById('qp-btn');
     const output = document.getElementById('qp-output');
 
@@ -1827,7 +1966,9 @@
             topic: topic,
             difficulty: difficulty,
             num_questions: parseInt(count),
-            types: qtypes
+            types: qtypes,
+            instructions: instructions,
+            selected_sources: selectedSources
         })
     });
 
@@ -2043,7 +2184,7 @@ Format as:
       const res = await fetch(`${API}/query`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ question: prompt, top_k: topk })
+        body: JSON.stringify({ question: prompt, top_k: topk, source_filter: sourceMode.prompt })
       });
 
       const data = await res.json();
@@ -2108,11 +2249,13 @@ Format as:
   function formatPaper(paper, topic, difficulty) {
     const total = (paper.mcq?.length || 0) + (paper.short?.length || 0) + (paper.long?.length || 0);
     const today = new Date().toLocaleDateString('en-IN', { year:'numeric', month:'long', day:'numeric' });
+    const CORPS_HEADER = 'TECHNICAL';
+    const isCorps = topic === CORPS_HEADER;
 
     let html = `
       <div class="paper-header-block">
-        <div class="paper-header-title">QUESTION PAPER</div>
-        <div class="paper-header-subject">${escapeHtml(topic || 'Technical Subject')}</div>
+        <div class="paper-header-title">${isCorps ? escapeHtml(CORPS_HEADER) : 'QUESTION PAPER'}</div>
+        <div class="paper-header-subject">${isCorps ? 'QUESTION PAPER' : escapeHtml(topic || 'Technical Subject')}</div>
         <div class="paper-header-meta">
           <span>📊 Difficulty: ${escapeHtml(difficulty || 'Medium')}</span>
           <span>❓ Total Questions: ${total}</span>
@@ -2447,16 +2590,8 @@ function handleDrop(e, section) {
   }
 }
 
-// Load document counts on page load
-['chat', 'paper', 'prompt'].forEach(s => {
-  fetch(`${API}/documents?section=${s}`)
-    .then(r => r.json())
-    .then(d => {
-      const el = document.getElementById(`docs-count-${s}`);
-      if (el) el.textContent = (d.documents || []).length;
-    })
-    .catch(() => {});
-});
+// Documents are loaded lazily when the user opens the docs section
+// (via toggleDocs or uploadFile) — no blocking fetch on page load.
 </script>
 
 </body>

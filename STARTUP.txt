@@ -1,0 +1,100 @@
+================================================================
+RAG SYSTEM — STARTUP PROCEDURE
+================================================================
+Open 3 separate terminals. Run each section in its own terminal.
+================================================================
+
+
+----------------------------------------------------------------
+TERMINAL 1 — Qdrant + Redis (Docker)
+----------------------------------------------------------------
+cd /home/hpc25/rag-system
+
+docker start qdrant
+docker start redis
+
+# Verify both are running:
+docker ps | grep -E "qdrant|redis"
+
+# Verify Qdrant is ready (should print: all shards are ready):
+curl http://localhost:6333/readyz
+
+
+----------------------------------------------------------------
+TERMINAL 2 — vLLM (GPU — takes 2-3 minutes to load)
+----------------------------------------------------------------
+cd /home/hpc25/rag-system
+source .venv/bin/activate
+
+python -m vllm.entrypoints.openai.api_server \
+  --model Qwen/Qwen2.5-14B-Instruct-AWQ \
+  --quantization awq \
+  --tensor-parallel-size 1 \
+  --max-model-len 32768 \
+  --gpu-memory-utilization 0.85 \
+  --port 8000
+
+# NOTE: Keep this terminal open. Wait until you see:
+#   INFO:     Application startup complete.
+# before starting Terminal 3.
+
+# If you only have 1 GPU available use tensor-parallel-size 1:
+#   --tensor-parallel-size 1
+
+
+----------------------------------------------------------------
+TERMINAL 3 — RAG API (FastAPI)
+----------------------------------------------------------------
+cd /home/hpc25/rag-system
+source .venv/bin/activate
+
+.venv/bin/uvicorn api.main:app --host 0.0.0.0 --port 8001
+
+# Frontend is available at:
+#   http://localhost:8001
+
+# To expose publicly via Cloudflare Tunnel (optional):
+#   cloudflared tunnel run <your-tunnel-name>
+
+
+----------------------------------------------------------------
+VERIFY ALL SERVICES (run in any terminal after startup)
+----------------------------------------------------------------
+curl http://localhost:8001/services
+
+# Expected output:
+# {"vllm":"ok","qdrant":"ok","redis":"ok"}
+
+
+----------------------------------------------------------------
+SHUTDOWN PROCEDURE
+----------------------------------------------------------------
+Terminal 3 — Press Ctrl+C  (stops RAG API)
+Terminal 2 — Press Ctrl+C  (stops vLLM)
+Terminal 1 — Run:
+  docker stop qdrant redis
+
+
+----------------------------------------------------------------
+TROUBLESHOOTING
+----------------------------------------------------------------
+
+Qdrant not starting?
+  Check data folder exists:  ls /home/hpc25/rag-system/qdrant_data/
+  Check Docker is running:   docker ps
+
+vLLM OOM (out of memory)?
+  Lower --gpu-memory-utilization to 0.80
+  Or use --tensor-parallel-size 1 if on single GPU
+
+RAG API port already in use?
+  pkill -f "uvicorn api.main:app"
+  Then re-run the uvicorn command.
+
+Redis not connecting?
+  docker restart redis
+
+Recheck all service statuses:
+  curl http://localhost:8001/services
+
+================================================================
